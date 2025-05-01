@@ -4,7 +4,6 @@ This sends requests and decodes responses. This is an example of
 how the request and response classes can be used.
 """
 
-
 import argparse
 import asyncio
 import logging
@@ -88,7 +87,7 @@ class Mower(BLEClient):
         if serial_number is None:
             return None
         return serial_number
-    
+
     async def mower_name(self) -> str | None:
         """Query the mower name"""
         name = await self.command("GetUserMowerNameAsAsciiString")
@@ -125,7 +124,7 @@ class Mower(BLEClient):
         if activity is None:
             return None
         return MowerActivity(activity)
-    
+
     async def mower_error(self) -> ErrorCodes | None:
         """Query the mower error"""
         error = await self.command("GetError")
@@ -139,14 +138,14 @@ class Mower(BLEClient):
         if next_start_time is None or next_start_time == 0:
             return None
         return datetime.fromtimestamp(next_start_time, timezone.utc)
-    
+
     async def mower_statistics(self) -> dict | None:
         """Query the mower statistics"""
         stats = await self.command("GetAllStatistics")
         if stats is None:
             return None
         return stats
-    
+
     async def get_task(self, taskid: int) -> TaskInformation | None:
         """
         Get information about a specific task
@@ -215,7 +214,9 @@ async def main(mower: Mower, args: argparse.Namespace):
 
     if device is None:
         print(f"Unable to connect to device address: {mower.address}")
-        print("Please make sure the device address is correct, the device is powered on, and nearby.")
+        print(
+            "Please make sure the device address is correct, the device is powered on, and nearby."
+        )
         return
 
     await mower.connect(device)

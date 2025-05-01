@@ -1,5 +1,3 @@
-
-
 def crc(data: bytearray, offset: int, length: int) -> int:
     """Used to generate CRCs for the packets"""
     f162a = [

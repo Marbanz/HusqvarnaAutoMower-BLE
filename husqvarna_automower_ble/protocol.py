@@ -7,7 +7,6 @@ import json
 from importlib.resources import files
 from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
-import aiofiles  # Add this import for asynchronous file operations
 
 logger = logging.getLogger(__name__)
 
@@ -273,14 +272,8 @@ class BLEClient:
 
         self.queue = asyncio.Queue()
 
-        # Use aiofiles for non-blocking file operations
-        asyncio.run(self._load_protocol())
-
-    async def _load_protocol(self):
-        async with aiofiles.open(
-            files("husqvarna_automower_ble").joinpath("protocol.json"), mode="r"
-        ) as f:
-            self.protocol = json.loads(await f.read())  # Load the JSON file asynchronously
+        with files("husqvarna_automower_ble").joinpath("protocol.json").open("r") as f:
+            self.protocol = json.load(f)  # Load the JSON file
 
     async def _get_response(self):
         try:
@@ -387,7 +380,10 @@ class BLEClient:
 
         logger.info("connecting to device...")
         self.client = BleakClient(
-            device, services=["98bd0001-0b0e-421a-84e5-ddbf75dc6de4"], use_cached=True, timeout=30
+            device,
+            services=["98bd0001-0b0e-421a-84e5-ddbf75dc6de4"],
+            use_cached=True,
+            timeout=30,
         )
         await self.client.connect()
         logger.info("connected")
@@ -471,7 +467,10 @@ class BLEClient:
     async def probe_gatts(self, device):
         logger.info("connecting to device...")
         client = BleakClient(
-            device, services=["98bd0001-0b0e-421a-84e5-ddbf75dc6de4"], use_cached=True, timeout=30
+            device,
+            services=["98bd0001-0b0e-421a-84e5-ddbf75dc6de4"],
+            use_cached=True,
+            timeout=30,
         )
 
         await client.connect()
