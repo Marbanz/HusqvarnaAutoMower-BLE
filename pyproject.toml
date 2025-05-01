@@ -1,24 +1,26 @@
 [build-system]
-requires = ["setuptools>=62.3"]
+requires = ["setuptools>=62.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "husqvarna_automower_ble"
-version = "1.1.4"
+version = "1.1.5"
 description = "An unofficial reverse engineered Husqvarna Automower Connect BLE library"
 readme = "README.md"
 requires-python = ">=3.12"
-authors     = [
+authors = [
     {name = "Marbanz", email = "martin.gilmozzi2005@gmail.com"},
     {name = "Alistair Francis", email = "alistair@alistair23.me"}
 ]
 classifiers = [
-  "Environment :: Console",
-  "Programming Language :: Python :: 3",
-  "License :: OSI Approved :: MIT License",
+    "Environment :: Console",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent"
 ]
 dependencies = [
-  "bleak",
+    "bleak",
+    "aiofiles"
 ]
 
 [tool.setuptools.package-data]

@@ -7,6 +7,7 @@ import json
 from importlib.resources import files
 from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
+import aiofiles  # Add this import for asynchronous file operations
 
 logger = logging.getLogger(__name__)
 
@@ -272,8 +273,14 @@ class BLEClient:
 
         self.queue = asyncio.Queue()
 
-        with files("husqvarna_automower_ble").joinpath("protocol.json").open("r") as f:
-            self.protocol = json.load(f)  # Load the JSON file
+        # Use aiofiles for non-blocking file operations
+        asyncio.run(self._load_protocol())
+
+    async def _load_protocol(self):
+        async with aiofiles.open(
+            files("husqvarna_automower_ble").joinpath("protocol.json"), mode="r"
+        ) as f:
+            self.protocol = json.loads(await f.read())  # Load the JSON file asynchronously
 
     async def _get_response(self):
         try:
