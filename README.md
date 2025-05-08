@@ -2,7 +2,7 @@
 
 This is an unofficial, reverse-engineered Husqvarna Automower Connect BLE library. It allows you to connect to and control an Automower without requiring any accounts, cloud services, or network connections.
 
-This library was originally developed by **Alistair23**, but it is now being maintained and further developed. The current focus is on integrating and testing with a **Gardena Sileno Minimo 250**, though it should still work with other Automower models. If you are able to test it on different models, please do so and report your results.
+This library was originally developed by **@alistair23**, but it is now being maintained and further developed. The current focus is on integrating and testing with a **Gardena Sileno Minimo 250**, though it should still work with other Automower models. If you are able to test it on different models, please do so and report your results.
 
 Details on the original reverse-engineering process are available here:  
 [Reverse Engineering Automower BLE](https://www.alistair23.me/2024/01/06/reverse-engineering-automower-ble)
