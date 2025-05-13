@@ -40,9 +40,11 @@ class Mower(BLEClient):
         if response is None:
             return None
 
-        if command.validate_response(response) is False:
-            # Just log if the response is invalid as this has been seen with user
-            # logs from official apps. I.e. it is somewhat expected.
+        # The StartTrigger command is expected to fail validation
+        if (
+            command.validate_response(response) is False
+            and command_name != "StartTrigger"
+        ):
             logger.warning("Response failed validation")
 
         response_dict = command.parse_response(response)
@@ -172,40 +174,28 @@ class Mower(BLEClient):
         if duration_hours <= 0:
             raise ValueError("Duration must be greater than 0")
 
-        # Set mode of operation to auto:
         await self.command("SetMode", mode=ModeOfOperation.AUTO)
-
-        # Set the duration of operation:
         await self.command("SetOverrideMow", duration=int(duration_hours * 3600))
-
-        # Request trigger to start, the response validation is expected to fail
         await self.command("StartTrigger")
 
     async def mower_pause(self):
         await self.command("Pause")
 
     async def mower_resume(self):
-        # The response validation is expected to fail
         await self.command("StartTrigger")
 
     async def mower_park(self):
         await self.command("SetOverrideParkUntilNextStart")
-
-        # Request trigger to start, the response validation is expected to fail
         await self.command("StartTrigger")
 
     async def mower_park_indefinitely(self):
         await self.command("ClearOverride")
         await self.command("SetMode", mode=ModeOfOperation.HOME)
-
-        # Request trigger to start, the response validation is expected to fail
         await self.command("StartTrigger")
 
     async def mower_auto(self):
         await self.command("ClearOverride")
         await self.command("SetMode", mode=ModeOfOperation.AUTO)
-
-        # Request trigger to start, the response validation is expected to fail
         await self.command("StartTrigger")
 
 
