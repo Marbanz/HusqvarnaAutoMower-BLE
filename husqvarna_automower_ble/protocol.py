@@ -458,6 +458,8 @@ class BLEClient:
             response = await self._request_response(request)
             if response is None:
                 return False
+            if command.validate_response(response) is False:
+                return False
 
         return True
 
