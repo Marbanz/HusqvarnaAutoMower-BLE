@@ -70,7 +70,7 @@ class Mower(BLEClient):
         return model_information.manufacturer
 
     async def get_model(self) -> str | None:
-        """Get the mower model"""
+        """Get the mower model."""
         model = await self.command("GetModel")
         if model is None:
             return None
@@ -84,22 +84,25 @@ class Mower(BLEClient):
         return model_information.model
 
     async def get_serial_number(self) -> str | None:
-        """Get the mower serial number"""
+        """Get the mower serial number."""
         serial_number = await self.command("GetSerialNumber")
         if serial_number is None:
             return None
         return serial_number
 
     async def mower_name(self) -> str | None:
-        """Query the mower name"""
+        """Query the mower name."""
         name = await self.command("GetUserMowerNameAsAsciiString")
         if name is None:
             return None
         return name
 
     async def battery_level(self) -> int | None:
-        """Query the mower battery level"""
-        return await self.command("GetBatteryLevel")
+        """Query the mower battery level."""
+        battery = await self.command("GetBatteryLevel")
+        if battery is None:
+            return None
+        return battery
 
     async def is_charging(self) -> bool:
         """Check if the mower is charging."""
@@ -143,7 +146,14 @@ class Mower(BLEClient):
 
     async def mower_statistics(self) -> dict | None:
         """Query the mower statistics"""
-        stats = await self.command("GetAllStatistics")
+        stats = {
+            "totalRunningTime": await self.command("GetTotalRunningTime"),
+            "totalCuttingTime": await self.command("GetTotalCuttingTime"),
+            "totalChargingTime": await self.command("GetTotalChargingTime"),
+            "totalSearchingTime": await self.command("GetTotalSearchingTime"),
+            "numberOfCollisions": await self.command("GetNumberOfCollisions"),
+            "numberOfChargingCycles": await self.command("GetNumberOfChargingCycles"),
+        }
         if stats is None:
             return None
         return stats
@@ -209,7 +219,9 @@ async def main(mower: Mower, args: argparse.Namespace):
         )
         return
 
-    await mower.connect(device)
+    if not await mower.connect(device):
+        print("Error connecting to device")
+        return
 
     try:
         manufacturer = await mower.get_manufacturer()
