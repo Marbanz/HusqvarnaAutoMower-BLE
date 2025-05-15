@@ -9,7 +9,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from .protocol import (
+from husqvarna_automower_ble.protocol import (
     BLEClient,
     Command,
     MowerState,
@@ -17,8 +17,8 @@ from .protocol import (
     ModeOfOperation,
     TaskInformation,
 )
-from .models import MowerModels
-from .error_codes import ErrorCodes
+from husqvarna_automower_ble.models import MowerModels
+from husqvarna_automower_ble.error_codes import ErrorCodes
 
 from bleak import BleakScanner
 
@@ -107,7 +107,7 @@ class Mower(BLEClient):
     async def is_charging(self) -> bool:
         """Check if the mower is charging."""
         response = await self.command("IsCharging")
-        return bool(response)
+        return bool(response) if response is not None else False
 
     async def mower_mode(self) -> ModeOfOperation | None:
         """Query the mower mode"""
@@ -154,8 +154,11 @@ class Mower(BLEClient):
             "numberOfCollisions": await self.command("GetNumberOfCollisions"),
             "numberOfChargingCycles": await self.command("GetNumberOfChargingCycles"),
         }
-        if stats is None:
+
+        # Check if any statistic was retrieved successfully
+        if all(value is None for value in stats.values()):
             return None
+
         return stats
 
     async def get_task(self, taskid: int) -> TaskInformation | None:
@@ -189,21 +192,26 @@ class Mower(BLEClient):
         await self.command("StartTrigger")
 
     async def mower_pause(self):
+        """Pause the mower's current operation"""
         await self.command("Pause")
 
     async def mower_resume(self):
+        """Resume the mower's operation"""
         await self.command("StartTrigger")
 
     async def mower_park(self):
+        """Park the mower until the next scheduled start"""
         await self.command("SetOverrideParkUntilNextStart")
         await self.command("StartTrigger")
 
     async def mower_park_indefinitely(self):
+        """Park the mower indefinitely"""
         await self.command("ClearOverride")
         await self.command("SetMode", mode=ModeOfOperation.HOME)
         await self.command("StartTrigger")
 
     async def mower_auto(self):
+        """Set the mower to automatic operation"""
         await self.command("ClearOverride")
         await self.command("SetMode", mode=ModeOfOperation.AUTO)
         await self.command("StartTrigger")

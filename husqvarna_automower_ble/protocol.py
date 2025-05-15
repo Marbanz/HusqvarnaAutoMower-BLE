@@ -1,5 +1,5 @@
 import binascii
-from .helpers import crc
+from husqvarna_automower_ble.helpers import crc
 from enum import IntEnum
 import asyncio
 import logging
@@ -458,7 +458,7 @@ class BLEClient:
             response = await self._request_response(request)
             if response is None:
                 return False
-            if command.validate_response(response) is False:
+            if not command.validate_response(response):
                 return False
 
         return True
@@ -562,6 +562,7 @@ class BLEClient:
         """
         data = bytearray.fromhex("02fd0a000000000000d00801")
 
+        # Channel ID
         id = self.channel_id.to_bytes(4, byteorder="little")
         data[4] = id[0]
         data[5] = id[1]
