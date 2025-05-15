@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "husqvarna_automower_ble"
-version = "1.1.8"
+version = "1.2.0"
 description = "An unofficial reverse engineered Husqvarna Automower Connect BLE library"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -19,7 +19,7 @@ classifiers = [
     "Operating System :: OS Independent"
 ]
 dependencies = [
-    "bleak"
+    "bleak>=0.21.1"
 ]
 
 [tool.setuptools.package-data]
