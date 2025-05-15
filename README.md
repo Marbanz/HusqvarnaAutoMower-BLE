@@ -1,4 +1,4 @@
-# AutoMower-BLE
+# HusqvarnaAutoMower-BLE
 
 This is an unofficial, reverse-engineered Husqvarna Automower Connect BLE library. It allows you to connect to and control an Automower without requiring any accounts, cloud services, or network connections.
 
@@ -45,10 +45,10 @@ python -m husqvarna_automower_ble.mower --address D8:B6:73:40:07:37 --command pa
 
 ## Contributing
 
-If you'd like to contribute to this project, feel free to submit issues or pull requests on the [GitHub repository](https://github.com/Marbanz/HusqvarnaAutoMower-BLE). Testing on different Automower models is especially appreciated!
+If you'd like to contribute to this project, feel free to submit issues or pull requests. Testing on different Automower models is especially appreciated!
 
 ---
 
 ## Disclaimer
 
-This is an unofficial library and is not affiliated with or endorsed by Husqvarna or Gardena. Use this library at your own risk.
+This is an unofficial library and is not affiliated with or endorsed by Husqvarna. Use this library at your own risk.
