@@ -55,6 +55,20 @@ class OverrideAction(IntEnum):
     FORCEDMOW = 2
 
 
+class ResponseResult(IntEnum):
+    OK = 0
+    UNKNOWN_ERROR = 1
+    INVALID_VALUE = 2
+    OUT_OF_RANGE = 3
+    NOT_AVAILABLE = 4
+    NOT_ALLOWED = 5
+    INVALID_GROUP = 6
+    INVALID_ID = 7
+    DEVICE_BUSY = 8
+    INVALID_PIN = 9
+    MOWER_BLOCKED = 10
+
+
 class TaskInformation(object):
     def __init__(
         self,
@@ -210,58 +224,6 @@ class Command:
             )
         return response
 
-    def validate_response(self, response_data: bytearray) -> bool:
-        if response_data[0] != 0x02:
-            return False
-
-        if response_data[1] != 0xFD:
-            return False
-
-        if response_data[3] != 0x00:  # high byte of length
-            return False
-
-        id = self.channel_id.to_bytes(4, byteorder="little")
-        if response_data[4] != id[0]:
-            return False
-        if response_data[5] != id[1]:
-            return False
-        if response_data[6] != id[2]:
-            return False
-        if response_data[7] != id[3]:
-            return False
-
-        if response_data[8] != 0x01:
-            # This is a valid config, but we don't support it
-            # return m1656b(decodeState, c10786f);
-            return False
-
-        if response_data[9] != crc(response_data, 1, 8):
-            return False
-
-        if response_data[10] != 0x01:  # packet type is not 0x01 = response
-            return False
-
-        if response_data[11] != 0xAF:
-            return False
-
-        major_bytes = self.major.to_bytes(4, byteorder="little")
-        if response_data[12] != major_bytes[0]:
-            return False
-        if response_data[13] != major_bytes[1]:
-            return False
-        if response_data[14] != self.minor:
-            return False
-
-        if response_data[15] != 0x00:  # high byte of 'command' (self.minor)
-            return False
-
-        if (
-            response_data[16] != 0x00
-        ):  # result: OK(0), UNKNOWN_ERROR(1), INVALID_VALUE(2), OUT_OF_RANGE(3), NOT_AVAILABLE(4), NOT_ALLOWED(5), INVALID_GROUP(6), INVALID_ID(7), DEVICE_BUSY(8), INVALID_PIN(9), MOWER_BLOCKED(10);
-            return False
-
-        return True
-
 
 class BLEClient:
     def __init__(self, channel_id: int, address, pin=None):
@@ -272,8 +234,19 @@ class BLEClient:
 
         self.queue = asyncio.Queue()
 
-        with files("husqvarna_automower_ble").joinpath("protocol.json").open("r") as f:
-            self.protocol = json.load(f)  # Load the JSON file
+        self.protocol = None
+
+    async def get_protocol(self):
+        if self.protocol is None:
+
+            def read_protocol_file():
+                with files("husqvarna_automower_ble").joinpath("protocol.json").open("r") as f:
+                    return json.load(f)
+
+            self.protocol = await asyncio.get_running_loop().run_in_executor(
+                None, read_protocol_file
+            )
+        return self.protocol
 
     async def _get_response(self):
         try:
@@ -367,16 +340,16 @@ class BLEClient:
 
         return response_data
 
-    async def connect(self, device) -> bool:
+    async def connect(self, device) -> ResponseResult:
         """
         Connect to a device and setup the channel
 
-        Returns True on success
+        Returns a ResponseResult
         """
 
         if device is None:
             logger.error("could not find device with address '%s'", self.address)
-            return False
+            return ResponseResult.UNKNOWN_ERROR
 
         logger.info("connecting to device...")
         self.client = BleakClient(
@@ -414,6 +387,11 @@ class BLEClient:
                             ",".join(char.properties),
                             e,
                         )
+                        if (
+                            char.uuid == "98bd0002-0b0e-421a-84e5-ddbf75dc6de4"
+                            or char.uuid == "98bd0003-0b0e-421a-84e5-ddbf75dc6de4"
+                        ):
+                            return ResponseResult.NOT_ALLOWED
 
                 else:
                     logger.debug(
@@ -439,29 +417,31 @@ class BLEClient:
         request = self.generate_request_setup_channel_id()
         response = await self._request_response(request)
         if response is None:
-            return False
-
-        ### TODO: Check response
-
+            return ResponseResult.UNKNOWN_ERROR
+        response_result = self.get_response_result(response)
+        if response_result != ResponseResult.OK:
+            return response_result
+        
         logger.info("Generating request handshake")
         request = self.generate_request_handshake()
         response = await self._request_response(request)
         if response is None:
-            return False
-
-        ### TODO: Check response
+            return ResponseResult.UNKNOWN_ERROR
+        response_result = self.get_response_result(response)
+        if response_result != ResponseResult.OK:
+            return response_result
 
         if self.pin is not None:
-            logger.info("Entering operator pin")
-            command = Command(self.channel_id, self.protocol["EnterOperatorPin"])
+            command = Command(
+                self.channel_id, (await self.get_protocol())["EnterOperatorPin"]
+            )
             request = command.generate_request(code=self.pin)
             response = await self._request_response(request)
             if response is None:
-                return False
-            if not command.validate_response(response):
-                return False
+                return ResponseResult.UNKNOWN_ERROR
+            return self.get_response_result(response)
 
-        return True
+        return ResponseResult.OK
 
     def is_connected(self) -> bool:
         return self.client.is_connected
@@ -575,3 +555,64 @@ class BLEClient:
         data.append(0x03)
 
         return data
+
+    def validate_response(self, response_data: bytearray) -> bool:
+        if response_data[0] != 0x02:
+            return False
+
+        if response_data[1] != 0xFD:
+            return False
+
+        if response_data[3] != 0x00:  # high byte of length
+            return False
+
+        id = self.channel_id.to_bytes(4, byteorder="little")
+        if response_data[4] != id[0]:
+            return False
+        if response_data[5] != id[1]:
+            return False
+        if response_data[6] != id[2]:
+            return False
+        if response_data[7] != id[3]:
+            return False
+
+        if response_data[8] != 0x01:
+            # This is a valid config, but we don't support it
+            # return m1656b(decodeState, c10786f);
+            return False
+
+        if response_data[9] != crc(response_data, 1, 8):
+            return False
+
+        if response_data[10] != 0x01:  # packet type is not 0x01 = response
+            return False
+
+        if response_data[11] != 0xAF:
+            return False
+
+        major_bytes = self.major.to_bytes(4, byteorder="little")
+        if response_data[12] != major_bytes[0]:
+            return False
+        if response_data[13] != major_bytes[1]:
+            return False
+        if response_data[14] != self.minor:
+            return False
+
+        if response_data[15] != 0x00:  # high byte of 'command' (self.minor)
+            return False
+
+        if (
+            response_data[16] != 0x00
+        ):  # result: OK(0), UNKNOWN_ERROR(1), INVALID_VALUE(2), OUT_OF_RANGE(3), NOT_AVAILABLE(4), NOT_ALLOWED(5), INVALID_GROUP(6), INVALID_ID(7), DEVICE_BUSY(8), INVALID_PIN(9), MOWER_BLOCKED(10);
+            logger.warning("Non zero response result: {d}", response_data[16])
+            return False
+
+        return True
+
+    def get_response_result(self, response_data: bytearray) -> ResponseResult:
+        if self.validate_response(response_data) is False:
+            # Just log if the response is invalid as this has been seen with user
+            # logs from official apps. I.e. it is somewhat expected.
+            logger.warning("Response failed validation")
+
+        return MowerState(response_data[16])

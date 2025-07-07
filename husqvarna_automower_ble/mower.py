@@ -34,7 +34,7 @@ class Mower(BLEClient):
         This function is used to simplify the communication of the mower using the commands found in protocol.json.
         It will send a request to the mower and then wait for a response. The response will be parsed and returned to the caller.
         """
-        command = Command(self.channel_id, self.protocol[command_name])
+        command = Command(self.channel_id, (await self.get_protocol())[command_name])
         request = command.generate_request(**kwargs)
         response = await self._request_response(request)
         if response is None:
@@ -42,8 +42,8 @@ class Mower(BLEClient):
 
         # The StartTrigger command is expected to fail validation
         if (
-            command.validate_response(response) is False
-            and command_name != "StartTrigger"
+            self.validate_response(response) is False
+            # and command_name != "StartTrigger"
         ):
             logger.warning("Response failed validation for command: %s", command_name)
 
@@ -155,7 +155,7 @@ class Mower(BLEClient):
             "numberOfChargingCycles": await self.command("GetNumberOfChargingCycles"),
         }
 
-        # Check if any statistic was retrieved successfully
+        # Check if all statistics are retrieved successfully
         if all(value is None for value in stats.values()):
             return None
 
