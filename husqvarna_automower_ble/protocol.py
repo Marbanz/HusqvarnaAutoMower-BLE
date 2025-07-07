@@ -240,7 +240,11 @@ class BLEClient:
         if self.protocol is None:
 
             def read_protocol_file():
-                with files("husqvarna_automower_ble").joinpath("protocol.json").open("r") as f:
+                with (
+                    files("husqvarna_automower_ble")
+                    .joinpath("protocol.json")
+                    .open("r") as f
+                ):
                     return json.load(f)
 
             self.protocol = await asyncio.get_running_loop().run_in_executor(
@@ -421,7 +425,7 @@ class BLEClient:
         response_result = self.get_response_result(response)
         if response_result != ResponseResult.OK:
             return response_result
-        
+
         logger.info("Generating request handshake")
         request = self.generate_request_handshake()
         response = await self._request_response(request)
