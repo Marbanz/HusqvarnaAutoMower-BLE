@@ -15,6 +15,7 @@ from husqvarna_automower_ble.protocol import (
     MowerState,
     MowerActivity,
     ModeOfOperation,
+    ResponseResult,
     TaskInformation,
 )
 from husqvarna_automower_ble.models import MowerModels
@@ -227,8 +228,11 @@ async def main(mower: Mower, args: argparse.Namespace):
         )
         return
 
-    if not await mower.connect(device):
+    connection_result = await mower.connect(device)
+
+    if connection_result != ResponseResult.OK:
         print("Error connecting to device")
+        print(f"Connection result: {connection_result.name}")
         return
 
     try:
