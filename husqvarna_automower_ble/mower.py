@@ -43,7 +43,7 @@ class Mower(BLEClient):
 
         # The StartTrigger command is expected to fail validation
         if (
-            self.validate_response(response) is False
+            command.validate_command_response(response) is False
             # and command_name != "StartTrigger"
         ):
             logger.warning("Response failed validation for command: %s", command_name)

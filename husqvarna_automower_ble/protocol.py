@@ -224,6 +224,59 @@ class Command:
             )
         return response
 
+    def validate_command_response(self, response_data: bytearray) -> bool:
+        if response_data[0] != 0x02:
+            return False
+
+        if response_data[1] != 0xFD:
+            return False
+
+        if response_data[3] != 0x00:  # high byte of length
+            return False
+
+        id = self.channel_id.to_bytes(4, byteorder="little")
+        if response_data[4] != id[0]:
+            return False
+        if response_data[5] != id[1]:
+            return False
+        if response_data[6] != id[2]:
+            return False
+        if response_data[7] != id[3]:
+            return False
+
+        if response_data[8] != 0x01:
+            # This is a valid config, but we don't support it
+            # return m1656b(decodeState, c10786f);
+            return False
+
+        if response_data[9] != crc(response_data, 1, 8):
+            return False
+
+        if response_data[10] != 0x01:  # packet type is not 0x01 = response
+            return False
+
+        if response_data[11] != 0xAF:
+            return False
+
+        major_bytes = self.major.to_bytes(4, byteorder="little")
+        if response_data[12] != major_bytes[0]:
+            return False
+        if response_data[13] != major_bytes[1]:
+            return False
+        if response_data[14] != self.minor:
+            return False
+
+        if response_data[15] != 0x00:  # high byte of 'command' (self.minor)
+            return False
+
+        if (
+            response_data[16] != 0x00
+        ):  # result: OK(0), UNKNOWN_ERROR(1), INVALID_VALUE(2), OUT_OF_RANGE(3), NOT_AVAILABLE(4), NOT_ALLOWED(5), INVALID_GROUP(6), INVALID_ID(7), DEVICE_BUSY(8), INVALID_PIN(9), MOWER_BLOCKED(10);
+            logger.warning("Non zero response result: {d}", response_data[16])
+            return False
+
+        return True
+
 
 class BLEClient:
     def __init__(self, channel_id: int, address, pin=None):
@@ -234,6 +287,7 @@ class BLEClient:
 
         self.queue = asyncio.Queue()
 
+        self.client = None
         self.protocol = None
 
     async def get_protocol(self):
@@ -258,15 +312,6 @@ class BLEClient:
 
         except TimeoutError:
             logger.error("Unable to get response from device: '%s'", self.address)
-
-            value = await self.client.read_gatt_char(self.read_char.uuid)
-            logger.debug(
-                "  [Characteristic] %s (%s), Value: %r",
-                self.read_char,
-                ",".join(self.read_char.properties),
-                value,
-            )
-
             return None
 
         return data
@@ -350,6 +395,7 @@ class BLEClient:
 
         Returns a ResponseResult
         """
+        logger.info("starting scan...")
 
         if device is None:
             logger.error("could not find device with address '%s'", self.address)
@@ -422,18 +468,12 @@ class BLEClient:
         response = await self._request_response(request)
         if response is None:
             return ResponseResult.UNKNOWN_ERROR
-        response_result = self.get_response_result(response)
-        if response_result != ResponseResult.OK:
-            return response_result
 
         logger.info("Generating request handshake")
         request = self.generate_request_handshake()
         response = await self._request_response(request)
         if response is None:
             return ResponseResult.UNKNOWN_ERROR
-        response_result = self.get_response_result(response)
-        if response_result != ResponseResult.OK:
-            return response_result
 
         if self.pin is not None:
             command = Command(
@@ -448,7 +488,7 @@ class BLEClient:
         return ResponseResult.OK
 
     def is_connected(self) -> bool:
-        return self.client.is_connected
+        return self.client and self.client.is_connected
 
     async def probe_gatts(self, device):
         logger.info("connecting to device...")
@@ -546,7 +586,6 @@ class BLEClient:
         """
         data = bytearray.fromhex("02fd0a000000000000d00801")
 
-        # Channel ID
         id = self.channel_id.to_bytes(4, byteorder="little")
         data[4] = id[0]
         data[5] = id[1]
@@ -592,17 +631,6 @@ class BLEClient:
             return False
 
         if response_data[11] != 0xAF:
-            return False
-
-        major_bytes = self.major.to_bytes(4, byteorder="little")
-        if response_data[12] != major_bytes[0]:
-            return False
-        if response_data[13] != major_bytes[1]:
-            return False
-        if response_data[14] != self.minor:
-            return False
-
-        if response_data[15] != 0x00:  # high byte of 'command' (self.minor)
             return False
 
         if (
