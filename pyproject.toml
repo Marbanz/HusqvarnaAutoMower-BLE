@@ -19,7 +19,7 @@ classifiers = [
     "Operating System :: OS Independent"
 ]
 dependencies = [
-    "bleak>=1.0.0"
+    "bleak>=0.21.1"
 ]
 
 [tool.setuptools.package-data]
