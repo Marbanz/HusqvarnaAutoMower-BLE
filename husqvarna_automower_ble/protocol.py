@@ -69,7 +69,7 @@ class ResponseResult(IntEnum):
     MOWER_BLOCKED = 10
 
 
-class TaskInformation(object):
+class TaskInformation:
     def __init__(
         self,
         next_start_time,
@@ -169,7 +169,7 @@ class Command:
                     request_length += 1
                     request_data += kwargs[request_name].to_bytes(1, byteorder="little")
                 else:
-                    raise ValueError("Unknown request type: " + self.request_type)
+                    raise ValueError("Unknown request type: " + request_type)
         self.request_data[16] = request_length
 
         self.request_data[17] = 0x00  # high byte of request_length
@@ -186,10 +186,10 @@ class Command:
 
         return self.request_data
 
-    def parse_response(self, response_data: bytearray) -> int | str | dict | None:
+    def parse_response(self, response_data: bytearray) -> dict[str, int | str] | None:
         response_length = response_data[17]
         data = response_data[19 : 19 + response_length]
-        response = dict()
+        response: dict[str, int | str] = {}
         dpos = 0  # data position
         for name, dtype in self.response_data_type.items():
             if dtype == "no_response":
@@ -219,9 +219,7 @@ class Command:
             else:
                 raise ValueError("Unknown data type: " + dtype)
         if dpos != len(data):
-            raise ValueError(
-                "Data length mismatch. Read %d bytes of %d" % (dpos, len(data))
-            )
+            raise ValueError(f"Data length mismatch. Read {dpos} bytes of {len(data)}")
         return response
 
     def validate_command_response(self, response_data: bytearray) -> bool:
@@ -272,7 +270,7 @@ class Command:
         if (
             response_data[16] != 0x00
         ):  # result: OK(0), UNKNOWN_ERROR(1), INVALID_VALUE(2), OUT_OF_RANGE(3), NOT_AVAILABLE(4), NOT_ALLOWED(5), INVALID_GROUP(6), INVALID_ID(7), DEVICE_BUSY(8), INVALID_PIN(9), MOWER_BLOCKED(10);
-            logger.warning(f"Non zero response result: {response_data[16]}")
+            logger.warning("Non zero response result: %d", response_data[16])
             return False
 
         return True
@@ -285,9 +283,9 @@ class BLEClient:
         self.pin = pin
         self.MTU_SIZE = 20
 
-        self.queue = asyncio.Queue()
+        self.queue: asyncio.Queue[bytearray] = asyncio.Queue()
 
-        self.client = None
+        self.client: BleakClient | None = None
         self.protocol = None
 
     async def get_protocol(self):
@@ -415,7 +413,9 @@ class BLEClient:
         await self.client.pair()
         logger.info("paired")
 
-        self.client._backend._mtu_size = self.MTU_SIZE
+        # This is not safe, _mtu_size is not defined in BaseBleakClient but may
+        # be defined in subclasses.
+        self.client._backend._mtu_size = self.MTU_SIZE  # type: ignore[attr-defined]
 
         for service in self.client.services:
             logger.info("[Service] %s", service)
@@ -488,7 +488,7 @@ class BLEClient:
         return ResponseResult.OK
 
     def is_connected(self) -> bool:
-        return self.client and self.client.is_connected
+        return bool(self.client and self.client.is_connected)
 
     async def probe_gatts(self, device):
         logger.info("connecting to device...")
@@ -636,7 +636,7 @@ class BLEClient:
         if (
             response_data[16] != 0x00
         ):  # result: OK(0), UNKNOWN_ERROR(1), INVALID_VALUE(2), OUT_OF_RANGE(3), NOT_AVAILABLE(4), NOT_ALLOWED(5), INVALID_GROUP(6), INVALID_ID(7), DEVICE_BUSY(8), INVALID_PIN(9), MOWER_BLOCKED(10);
-            logger.warning(f"Non zero response result: {response_data[16]}")
+            logger.warning("Non zero response result: %d", response_data[16])
             return False
 
         return True
