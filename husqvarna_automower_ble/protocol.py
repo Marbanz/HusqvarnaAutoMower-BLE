@@ -100,10 +100,7 @@ class Command:
         self.major = parameter["major"]
         self.minor = parameter["minor"]
 
-        if "requestType" in parameter:
-            self.request_data_type = parameter["requestType"]
-        else:
-            self.request_data_type = None
+        self.request_data_type = parameter.get("requestType")
 
         if "responseType" not in parameter:
             parameter["responseType"] = "no_response"
@@ -122,11 +119,7 @@ class Command:
         self.request_data[3] = 0x00  # Length, high byte, updated later
 
         # ChannelID
-        id = self.channel_id.to_bytes(4, byteorder="little")
-        self.request_data[4] = id[0]
-        self.request_data[5] = id[1]
-        self.request_data[6] = id[2]
-        self.request_data[7] = id[3]
+        self.request_data[4:8] = self.channel_id.to_bytes(4, byteorder="little")
 
         self.request_data[8] = 0x01  # is_linked (usually 0x01)
 
@@ -232,14 +225,7 @@ class Command:
         if response_data[3] != 0x00:  # high byte of length
             return False
 
-        id = self.channel_id.to_bytes(4, byteorder="little")
-        if response_data[4] != id[0]:
-            return False
-        if response_data[5] != id[1]:
-            return False
-        if response_data[6] != id[2]:
-            return False
-        if response_data[7] != id[3]:
+        if response_data[4:8] != self.channel_id.to_bytes(4, byteorder="little"):
             return False
 
         if response_data[8] != 0x01:
@@ -315,7 +301,7 @@ class BLEClient:
         return data
 
     async def _write_data(self, data):
-        logger.info("Writing: " + str(binascii.hexlify(data)))
+        logger.info("Writing: %s", str(binascii.hexlify(data)))
 
         chunk_size = self.MTU_SIZE - 3
         for chunk in (
@@ -348,14 +334,14 @@ class BLEClient:
                 data = data + await asyncio.wait_for(self.queue.get(), timeout=5)
             except TimeoutError:
                 logger.error(
-                    "Unable to get full response from device: '%s', currently have"
-                    + str(binascii.hexlify(data)),
+                    "Unable to get full response from device: '%s', currently have %s",
+                    str(binascii.hexlify(data)),
                     self.address,
                 )
                 logger.error("Expecting %d bytes, only have %d", length, len(data))
                 return None
 
-        logger.info("Final response: " + str(binascii.hexlify(data)))
+        logger.info("Final response: %s", str(binascii.hexlify(data)))
 
         return data
 
@@ -456,7 +442,7 @@ class BLEClient:
         async def notification_handler(
             characteristic: BleakGATTCharacteristic, data: bytearray
         ):
-            logger.info("Received: " + str(binascii.hexlify(data)))
+            logger.info("Received: %s", str(binascii.hexlify(data)))
             await self.queue.put(data)
 
         await self.client.start_notify(self.read_char, notification_handler)
@@ -566,11 +552,7 @@ class BLEClient:
         data = bytearray.fromhex("02fd160000000000002e1400000000000000004d61696e00")
 
         # New ChannelID
-        id = self.channel_id.to_bytes(4, byteorder="little")
-        data[11] = id[0]
-        data[12] = id[1]
-        data[13] = id[2]
-        data[14] = id[3]
+        data[11:15] = self.channel_id.to_bytes(4, byteorder="little")
 
         # CRC and end byte
         data[9] = crc(data, 1, 8)
@@ -586,11 +568,7 @@ class BLEClient:
         """
         data = bytearray.fromhex("02fd0a000000000000d00801")
 
-        id = self.channel_id.to_bytes(4, byteorder="little")
-        data[4] = id[0]
-        data[5] = id[1]
-        data[6] = id[2]
-        data[7] = id[3]
+        data[4:8] = self.channel_id.to_bytes(4, byteorder="little")
 
         # CRCs and end byte
         data[9] = crc(data, 1, 8)
@@ -609,14 +587,7 @@ class BLEClient:
         if response_data[3] != 0x00:  # high byte of length
             return False
 
-        id = self.channel_id.to_bytes(4, byteorder="little")
-        if response_data[4] != id[0]:
-            return False
-        if response_data[5] != id[1]:
-            return False
-        if response_data[6] != id[2]:
-            return False
-        if response_data[7] != id[3]:
+        if response_data[4:8] != self.channel_id.to_bytes(4, byteorder="little"):
             return False
 
         if response_data[8] != 0x01:
