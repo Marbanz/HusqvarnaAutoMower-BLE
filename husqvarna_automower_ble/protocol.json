@@ -44,6 +44,19 @@
       "severity": "uint8"
     }
   },
+  "GetAllStatistics": {
+    "major": 4726,
+    "minor": 0,
+    "responseType": {
+      "totalRunningTime": "uint32",
+      "totalCuttingTime": "uint32",
+      "totalChargingTime": "uint32",
+      "totalSearchingTime": "uint32",
+      "numberOfCollisions": "uint32",
+      "numberOfChargingCycles": "uint32",
+      "cuttingBladeUsageTime": "uint32"
+    }
+  },
   "GetTotalRunningTime": {
     "major": 4726,
     "minor": 1,
