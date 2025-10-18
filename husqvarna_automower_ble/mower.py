@@ -139,7 +139,7 @@ class Mower(BLEClient):
         next_start_time = await self.command("GetNextStartTime")
         if next_start_time is None or next_start_time == 0:
             return None
-        return datetime.fromtimestamp(next_start_time).astimezone()
+        return datetime.fromtimestamp(next_start_time, UTC)
 
     async def mower_statistics(self) -> dict | None:
         """Query the mower statistics"""
