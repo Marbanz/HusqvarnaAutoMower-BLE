@@ -5,8 +5,12 @@ import asyncio
 import logging
 import json
 from importlib.resources import files
-from bleak import BleakClient
 from bleak.backends.characteristic import BleakGATTCharacteristic
+from bleak_retry_connector import establish_connection, BleakClientWithServiceCache
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bleak import BleakClient
 
 logger = logging.getLogger(__name__)
 
@@ -348,29 +352,20 @@ class BLEClient:
         return data
 
     async def _request_response(self, request_data):
-        i = 5
-        while i > 0:
-            try:
-                # If there are previous responses, flush them out
-                while not self.queue.empty():
-                    await self.queue.get()
+        try:
+            # If there are previous responses, flush them out
+            while not self.queue.empty():
+                await self.queue.get()
 
-                await self._write_data(request_data)
+            await self._write_data(request_data)
 
-                response_data = await self._read_data()
-                if response_data is None:
-                    i = i - 1
-                    continue
+            response_data = await self._read_data()
+            if response_data is None:
+                logger.error("Unable to communicate with device: '%s'", self.address)
+                return None
 
-            except asyncio.exceptions.CancelledError:
-                logger.debug("Received CancelledError")
-                i = i - 1
-                continue
-
-            break
-
-        if i == 0:
-            logger.error("Unable to communicate with device: '%s'", self.address)
+        except asyncio.exceptions.CancelledError:
+            logger.debug("Received CancelledError")
             return None
 
         return response_data
@@ -388,13 +383,11 @@ class BLEClient:
             return ResponseResult.UNKNOWN_ERROR
 
         logger.info("connecting to device...")
-        self.client = BleakClient(
+        self.client = await establish_connection(
+            BleakClientWithServiceCache,
             device,
-            services=["98bd0001-0b0e-421a-84e5-ddbf75dc6de4"],
-            use_cached=True,
-            timeout=30,
+            device.name or "Unknown Device",
         )
-        await self.client.connect()
         logger.info("connected")
 
         logger.info("pairing device...")
@@ -486,14 +479,12 @@ class BLEClient:
 
     async def probe_gatts(self, device):
         logger.info("connecting to device...")
-        client = BleakClient(
+        client = await establish_connection(
+            BleakClientWithServiceCache,
             device,
-            services=["98bd0001-0b0e-421a-84e5-ddbf75dc6de4"],
-            use_cached=True,
-            timeout=30,
+            device.name or "Unknown Device",
+            max_attempts=3,  # Will retry up to 3 times with backoff
         )
-
-        await client.connect()
         logger.info("connected")
 
         manufacture = None
