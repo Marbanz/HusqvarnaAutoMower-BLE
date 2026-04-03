@@ -260,8 +260,7 @@ class Command:
         if (
             response_data[16] != 0x00
         ):  # result: OK(0), UNKNOWN_ERROR(1), INVALID_VALUE(2), OUT_OF_RANGE(3), NOT_AVAILABLE(4), NOT_ALLOWED(5), INVALID_GROUP(6), INVALID_ID(7), DEVICE_BUSY(8), INVALID_PIN(9), MOWER_BLOCKED(10);
-            logger.warning("Non zero response result: %d", response_data[16])
-            return False
+            logger.debug("Non zero response result: %d", response_data[16])
 
         return True
 
@@ -273,9 +272,11 @@ class BLEClient:
         self.pin = pin
         self.MTU_SIZE = 20
 
-        self.queue: asyncio.Queue[bytearray] = asyncio.Queue()
+        self.queue: asyncio.Queue[bytearray | None] = asyncio.Queue()
 
         self.client: BleakClient | None = None
+        self.write_char: BleakGATTCharacteristic | None = None
+        self.read_char: BleakGATTCharacteristic | None = None
         self.protocol = None
 
     async def get_protocol(self):
@@ -294,7 +295,7 @@ class BLEClient:
             )
         return self.protocol
 
-    async def _get_response(self):
+    async def _get_response(self) -> bytearray | None:
         try:
             data = await asyncio.wait_for(self.queue.get(), timeout=10)
 
@@ -302,16 +303,24 @@ class BLEClient:
             logger.error("Unable to get response from device: '%s'", self.address)
             return None
 
+        if data is None:
+            return None
+
         return data
 
     async def _write_data(self, data):
-        logger.info("Writing: %s", str(binascii.hexlify(data)))
+        logger.debug("Writing: %s", str(binascii.hexlify(data)))
+
+        client = self.client
+        write_char = self.write_char
+        if client is None or write_char is None:
+            raise RuntimeError("BLE client is not connected")
 
         chunk_size = self.MTU_SIZE - 3
         for chunk in (
             data[i : i + chunk_size] for i in range(0, len(data), chunk_size)
         ):
-            await self.client.write_gatt_char(self.write_char, chunk, response=False)
+            await client.write_gatt_char(write_char, chunk, response=False)
 
         logger.debug("Finished writing")
 
@@ -323,9 +332,10 @@ class BLEClient:
 
         if len(data) < 3:
             # We got such a small amount of data, let's try again
-            if chunk := await self._get_response() is None:
+            chunk = await self._get_response()
+            if chunk is None:
                 return None
-            data = data + chunk
+            data += chunk
 
             if len(data) < 3:
                 # Something is wrong
@@ -337,7 +347,10 @@ class BLEClient:
 
         while len(data) < length:
             try:
-                data = data + await asyncio.wait_for(self.queue.get(), timeout=5)
+                chunk = await asyncio.wait_for(self.queue.get(), timeout=5)
+                if chunk is None:
+                    return None
+                data += chunk
             except TimeoutError:
                 logger.error(
                     "Unable to get full response from device: '%s', currently have %s",
@@ -347,7 +360,7 @@ class BLEClient:
                 logger.error("Expecting %d bytes, only have %d", length, len(data))
                 return None
 
-        logger.info("Final response: %s", str(binascii.hexlify(data)))
+        logger.debug("Final response: %s", str(binascii.hexlify(data)))
 
         return data
 
@@ -399,7 +412,7 @@ class BLEClient:
         self.client._backend._mtu_size = self.MTU_SIZE  # type: ignore[attr-defined]
 
         for service in self.client.services:
-            logger.info("[Service] %s", service)
+            logger.debug("[Service] %s", service)
 
             for char in service.characteristics:
                 if "read" in char.properties:
@@ -434,23 +447,27 @@ class BLEClient:
                 if char.uuid == "98bd0003-0b0e-421a-84e5-ddbf75dc6de4":
                     self.read_char = char
 
+        if self.write_char is None or self.read_char is None:
+            logger.error("Could not find required write/read BLE characteristics")
+            return ResponseResult.NOT_AVAILABLE
+
         async def notification_handler(
             characteristic: BleakGATTCharacteristic, data: bytearray
         ):
-            logger.info("Received: %s", str(binascii.hexlify(data)))
+            logger.debug("Received: %s", str(binascii.hexlify(data)))
             await self.queue.put(data)
 
         await self.client.start_notify(self.read_char, notification_handler)
 
         await asyncio.sleep(5.0)
 
-        logger.info("Setting channel ID")
+        logger.debug("Setting channel ID")
         request = self.generate_request_setup_channel_id()
         response = await self._request_response(request)
         if response is None:
             return ResponseResult.UNKNOWN_ERROR
 
-        logger.info("Generating request handshake")
+        logger.debug("Generating request handshake")
         request = self.generate_request_handshake()
         response = await self._request_response(request)
         if response is None:
@@ -463,6 +480,9 @@ class BLEClient:
             request = command.generate_request(code=self.pin)
             response = await self._request_response(request)
             if response is None:
+                return ResponseResult.UNKNOWN_ERROR
+            if command.validate_command_response(response) is False:
+                logger.warning("PIN response failed validation")
                 return ResponseResult.UNKNOWN_ERROR
             result = self.get_response_result(response)
             # If the result is UNKNOWN_ERROR, assume the pin was invalid
@@ -538,11 +558,17 @@ class BLEClient:
         `connect()` before the Python script exits
         """
 
-        await self.client.stop_notify(self.read_char)
+        client = self.client
+        read_char = self.read_char
+        if client is None or read_char is None:
+            return
+
+        await client.stop_notify(read_char)
         await self.queue.put(None)
 
         logger.info("disconnecting...")
-        await self.client.disconnect()
+        await client.disconnect()
+        self.client = None
         logger.info("disconnected")
 
     def generate_request_setup_channel_id(self) -> bytearray:
@@ -578,45 +604,10 @@ class BLEClient:
 
         return data
 
-    def validate_response(self, response_data: bytearray) -> bool:
-        if response_data[0] != 0x02:
-            return False
-
-        if response_data[1] != 0xFD:
-            return False
-
-        if response_data[3] != 0x00:  # high byte of length
-            return False
-
-        if response_data[4:8] != self.channel_id.to_bytes(4, byteorder="little"):
-            return False
-
-        if response_data[8] != 0x01:
-            # This is a valid config, but we don't support it
-            # return m1656b(decodeState, c10786f);
-            return False
-
-        if response_data[9] != crc(response_data, 1, 8):
-            return False
-
-        if response_data[10] != 0x01:  # packet type is not 0x01 = response
-            return False
-
-        if response_data[11] != 0xAF:
-            return False
-
-        if (
-            response_data[16] != 0x00
-        ):  # result: OK(0), UNKNOWN_ERROR(1), INVALID_VALUE(2), OUT_OF_RANGE(3), NOT_AVAILABLE(4), NOT_ALLOWED(5), INVALID_GROUP(6), INVALID_ID(7), DEVICE_BUSY(8), INVALID_PIN(9), MOWER_BLOCKED(10);
-            logger.warning("Non zero response result: %d", response_data[16])
-            return False
-
-        return True
-
     def get_response_result(self, response_data: bytearray) -> ResponseResult:
-        if self.validate_response(response_data) is False:
-            # Just log if the response is invalid as this has been seen with user
-            # logs from official apps. I.e. it is somewhat expected.
-            logger.warning("Response failed validation")
-
-        return ResponseResult(response_data[16])
+        result_code = response_data[16]
+        try:
+            return ResponseResult(result_code)
+        except ValueError:
+            logger.debug("Unknown response result code: %d", result_code)
+            return ResponseResult.UNKNOWN_ERROR

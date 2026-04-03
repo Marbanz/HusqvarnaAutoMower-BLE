@@ -25,12 +25,16 @@ from bleak import BleakScanner
 
 logger = logging.getLogger(__name__)
 
+type ResponseScalar = int | str
+type ResponseDict = dict[str, ResponseScalar]
+type CommandResponse = ResponseScalar | ResponseDict | None
+
 
 class Mower(BLEClient):
     def __init__(self, channel_id: int, address: str, pin: int | None = None):
         super().__init__(channel_id, address, pin)
 
-    async def command(self, command_name: str, **kwargs):
+    async def command(self, command_name: str, **kwargs) -> CommandResponse:
         """
         This function is used to simplify the communication of the mower using the commands found in protocol.json.
         It will send a request to the mower and then wait for a response. The response will be parsed and returned to the caller.
@@ -41,9 +45,17 @@ class Mower(BLEClient):
         if response is None:
             return None
 
-        # The StartTrigger command is expected to fail validation
-        if command.validate_command_response(response) is False:
+        if not command.validate_command_response(response):
             logger.warning("Response failed validation for command: %s", command_name)
+            return None
+
+        # The StartTrigger command can return UNKNOWN_ERROR even when it succeeds.
+        result = self.get_response_result(response)
+        command_succeeded = result == ResponseResult.OK or (
+            command_name == "StartTrigger" and result == ResponseResult.UNKNOWN_ERROR
+        )
+        if not command_succeeded:
+            logger.warning("Command failed: %s (%s)", command_name, result.name)
 
         response_dict = command.parse_response(response)
         if (
@@ -55,28 +67,34 @@ class Mower(BLEClient):
     async def get_manufacturer(self) -> str | None:
         """Get the mower manufacturer"""
         model = await self.command("GetModel")
-        if model is None:
+        if not isinstance(model, dict):
             return None
 
-        model_information = MowerModels.get(
-            (model["deviceType"], model["deviceVariant"])
-        )
+        device_type = model.get("deviceType")
+        device_variant = model.get("deviceVariant")
+        if not isinstance(device_type, int) or not isinstance(device_variant, int):
+            return None
+
+        model_information = MowerModels.get((device_type, device_variant))
         if model_information is None:
-            return f"Unknown Manufacturer ({model['deviceType']}, {model['deviceVariant']})"
+            return f"Unknown Manufacturer ({device_type}, {device_variant})"
 
         return model_information.manufacturer
 
     async def get_model(self) -> str | None:
         """Get the mower model."""
         model = await self.command("GetModel")
-        if model is None:
+        if not isinstance(model, dict):
             return None
 
-        model_information = MowerModels.get(
-            (model["deviceType"], model["deviceVariant"])
-        )
+        device_type = model.get("deviceType")
+        device_variant = model.get("deviceVariant")
+        if not isinstance(device_type, int) or not isinstance(device_variant, int):
+            return None
+
+        model_information = MowerModels.get((device_type, device_variant))
         if model_information is None:
-            return f"Unknown Model ({model['deviceType']}, {model['deviceVariant']})"
+            return f"Unknown Model ({device_type}, {device_variant})"
 
         return model_information.model
 
@@ -85,21 +103,21 @@ class Mower(BLEClient):
         serial_number = await self.command("GetSerialNumber")
         if serial_number is None:
             return None
-        return serial_number
+        if isinstance(serial_number, int):
+            return str(serial_number)
+        if isinstance(serial_number, str):
+            return serial_number
+        return None
 
     async def mower_name(self) -> str | None:
         """Query the mower name."""
         name = await self.command("GetUserMowerNameAsAsciiString")
-        if name is None:
-            return None
-        return name
+        return name if isinstance(name, str) else None
 
     async def battery_level(self) -> int | None:
         """Query the mower battery level."""
         battery = await self.command("GetBatteryLevel")
-        if battery is None:
-            return None
-        return battery
+        return battery if isinstance(battery, int) else None
 
     async def is_charging(self) -> bool:
         """Check if the mower is charging."""
@@ -137,7 +155,7 @@ class Mower(BLEClient):
     async def mower_next_start_time(self) -> datetime | None:
         """Query the mower next start time"""
         next_start_time = await self.command("GetNextStartTime")
-        if next_start_time is None or next_start_time == 0:
+        if not isinstance(next_start_time, int) or next_start_time == 0:
             return None
         return datetime.fromtimestamp(next_start_time, UTC).replace(tzinfo=None)
 
@@ -163,18 +181,45 @@ class Mower(BLEClient):
         Get information about a specific task
         """
         task = await self.command("GetTask", taskId=taskid)
-        if task is None:
+        if not isinstance(task, dict):
             return None
+
+        start = task.get("start")
+        duration = task.get("duration")
+        use_on_monday = task.get("useOnMonday")
+        use_on_tuesday = task.get("useOnTuesday")
+        use_on_wednesday = task.get("useOnWednesday")
+        use_on_thursday = task.get("useOnThursday")
+        use_on_friday = task.get("useOnFriday")
+        use_on_saturday = task.get("useOnSaturday")
+        use_on_sunday = task.get("useOnSunday")
+
+        if not all(
+            isinstance(value, int)
+            for value in (
+                start,
+                duration,
+                use_on_monday,
+                use_on_tuesday,
+                use_on_wednesday,
+                use_on_thursday,
+                use_on_friday,
+                use_on_saturday,
+                use_on_sunday,
+            )
+        ):
+            return None
+
         return TaskInformation(
-            task["start"],
-            task["duration"],
-            task["useOnMonday"],
-            task["useOnTuesday"],
-            task["useOnWednesday"],
-            task["useOnThursday"],
-            task["useOnFriday"],
-            task["useOnSaturday"],
-            task["useOnSunday"],
+            start,
+            duration,
+            use_on_monday,
+            use_on_tuesday,
+            use_on_wednesday,
+            use_on_thursday,
+            use_on_friday,
+            use_on_saturday,
+            use_on_sunday,
         )
 
     async def mower_override(self, duration_hours: float = 3.0) -> None:
