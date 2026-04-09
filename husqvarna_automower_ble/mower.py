@@ -269,14 +269,14 @@ async def main(mower: Mower, args: argparse.Namespace):
         )
         return
 
-    connection_result = await mower.connect(device)
-
-    if connection_result != ResponseResult.OK:
-        print("Error connecting to device")
-        print(f"Connection result: {connection_result.name}")
-        return
-
     try:
+        connection_result = await mower.connect(device)
+
+        if connection_result != ResponseResult.OK:
+            print("Error connecting to device")
+            print(f"Connection result: {connection_result.name}")
+            return
+
         manufacturer = await mower.get_manufacturer()
         print(f"Mower manufacturer: {manufacturer or 'Unknown'}")
 
