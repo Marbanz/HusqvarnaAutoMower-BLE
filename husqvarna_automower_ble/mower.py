@@ -7,7 +7,7 @@ how the request and response classes can be used.
 import argparse
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, UTC
 
 from husqvarna_automower_ble.protocol import (
     BLEClient,
@@ -157,7 +157,7 @@ class Mower(BLEClient):
         next_start_time = await self.command("GetNextStartTime")
         if not isinstance(next_start_time, int) or next_start_time == 0:
             return None
-        return datetime.fromtimestamp(next_start_time)
+        return datetime.fromtimestamp(next_start_time, UTC).replace(tzinfo=None)
 
     async def mower_statistics(self) -> dict | None:
         """Query the mower statistics"""
