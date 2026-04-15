@@ -19,8 +19,8 @@ classifiers = [
     "Operating System :: OS Independent"
 ]
 dependencies = [
-  "bleak",
-  "bleak_retry_connector",
+  "bleak>=2.1.1",
+  "bleak-retry-connector>=4.5.0",
 ]
 
 [tool.ruff]
