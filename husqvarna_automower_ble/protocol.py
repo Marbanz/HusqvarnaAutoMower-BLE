@@ -297,7 +297,7 @@ class BLEClient:
 
     async def _get_response(self) -> bytearray | None:
         try:
-            data = await asyncio.wait_for(self.queue.get(), timeout=10)
+            data = await asyncio.wait_for(self.queue.get(), timeout=15)
 
         except TimeoutError:
             logger.error("Unable to get response from device: '%s'", self.address)
@@ -347,7 +347,7 @@ class BLEClient:
 
         while len(data) < length:
             try:
-                chunk = await asyncio.wait_for(self.queue.get(), timeout=5)
+                chunk = await asyncio.wait_for(self.queue.get(), timeout=10)
                 if chunk is None:
                     return None
                 data += chunk
@@ -400,6 +400,7 @@ class BLEClient:
             BleakClientWithServiceCache,
             device,
             device.name or "Unknown Device",
+            max_attempts=3,  # Will retry up to 3 times with backoff
         )
         logger.info("connected")
 
