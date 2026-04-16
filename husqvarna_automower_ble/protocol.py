@@ -459,7 +459,7 @@ class BLEClient:
 
         await self.client.start_notify(self.read_char, notification_handler)
 
-        await asyncio.sleep(5.0)
+        await asyncio.sleep(8.0)
 
         logger.debug("Setting channel ID")
         request = self.generate_request_setup_channel_id()
