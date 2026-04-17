@@ -308,6 +308,21 @@ class BLEClient:
 
         return data
 
+    async def _get_response_silent(self) -> bytearray | None:
+        """Get response with debug-level logging (for retry scenarios)"""
+        try:
+            data = await asyncio.wait_for(self.queue.get(), timeout=10)
+        except TimeoutError:
+            logger.debug(
+                "Unable to get response from device (retry attempt): '%s'", self.address
+            )
+            return None
+
+        if data is None:
+            return None
+
+        return data
+
     async def _write_data(self, data):
         logger.debug("Writing: %s", str(binascii.hexlify(data)))
 
@@ -364,6 +379,47 @@ class BLEClient:
 
         return data
 
+    async def _read_data_silent(self):
+        """Read data with debug-level logging (for retry scenarios)"""
+        data = await self._get_response_silent()
+
+        if data is None:
+            return None
+
+        if len(data) < 3:
+            # We got such a small amount of data, let's try again
+            chunk = await self._get_response_silent()
+            if chunk is None:
+                return None
+            data += chunk
+
+            if len(data) < 3:
+                # Something is wrong
+                return None
+
+        length = data[2] + 4
+
+        logger.debug("Waiting for %d bytes", length)
+
+        while len(data) < length:
+            try:
+                chunk = await asyncio.wait_for(self.queue.get(), timeout=5)
+                if chunk is None:
+                    return None
+                data += chunk
+            except TimeoutError:
+                logger.debug(
+                    "Unable to get full response from device (retry attempt): '%s', currently have %s",
+                    str(binascii.hexlify(data)),
+                    self.address,
+                )
+                logger.debug("Expecting %d bytes, only have %d", length, len(data))
+                return None
+
+        logger.debug("Final response: %s", str(binascii.hexlify(data)))
+
+        return data
+
     async def _request_response(self, request_data):
         try:
             # If there are previous responses, flush them out
@@ -382,6 +438,48 @@ class BLEClient:
             return None
 
         return response_data
+
+    async def _request_response_with_retry(self, request_data):
+        """
+        Send request with automatic retry (up to 3 times).
+        Does not log errors on failed attempts until the final attempt.
+        Useful for handling device deep sleep scenarios.
+        """
+        max_attempts = 3
+
+        for attempt in range(max_attempts):
+            try:
+                logger.debug("Retry attempt %d/%d", attempt + 1, max_attempts)
+
+                # If there are previous responses, flush them out
+                while not self.queue.empty():
+                    await self.queue.get()
+
+                await self._write_data(request_data)
+
+                # Use silent read on retry attempts, normal read on last attempt
+                if attempt < max_attempts - 1:
+                    response_data = await self._read_data_silent()
+                else:
+                    response_data = await self._read_data()
+
+                if response_data is not None:
+                    logger.debug("Got response on attempt %d", attempt + 1)
+                    return response_data
+
+                logger.debug("No response on attempt %d", attempt + 1)
+
+            except asyncio.exceptions.CancelledError:
+                logger.debug("Received CancelledError")
+                return None
+
+            # Wait before retrying (except on last attempt)
+            if attempt < max_attempts - 1:
+                logger.debug("Waiting 1 seconds before retry...")
+                await asyncio.sleep(1)
+
+        logger.error("Unable to communicate with device: '%s'", self.address)
+        return None
 
     async def connect(self, device) -> ResponseResult:
         """
@@ -459,11 +557,11 @@ class BLEClient:
 
         await self.client.start_notify(self.read_char, notification_handler)
 
-        await asyncio.sleep(8.0)
+        await asyncio.sleep(3.0)
 
         logger.debug("Setting channel ID")
         request = self.generate_request_setup_channel_id()
-        response = await self._request_response(request)
+        response = await self._request_response_with_retry(request)
         if response is None:
             return ResponseResult.UNKNOWN_ERROR
 
