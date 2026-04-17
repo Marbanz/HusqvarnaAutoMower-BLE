@@ -56,6 +56,7 @@ class Mower(BLEClient):
         )
         if not command_succeeded:
             logger.warning("Command failed: %s (%s)", command_name, result.name)
+            return None
 
         response_dict = command.parse_response(response)
         if (
