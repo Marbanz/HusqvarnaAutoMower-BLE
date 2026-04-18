@@ -572,6 +572,7 @@ class BLEClient:
             return ResponseResult.UNKNOWN_ERROR
 
         if self.pin is not None:
+            logger.debug("Entering operator PIN")
             command = Command(
                 self.channel_id, (await self.get_protocol())["EnterOperatorPin"]
             )
