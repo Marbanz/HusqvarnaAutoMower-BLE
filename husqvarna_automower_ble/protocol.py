@@ -272,6 +272,7 @@ class BLEClient:
         self.pin = pin
         self.MTU_SIZE = 20
 
+        self.lock = asyncio.Lock()
         self.queue: asyncio.Queue[bytearray | None] = asyncio.Queue()
 
         self.client: BleakClient | None = None
@@ -421,21 +422,24 @@ class BLEClient:
         return data
 
     async def _request_response(self, request_data):
-        try:
-            # If there are previous responses, flush them out
-            while not self.queue.empty():
-                await self.queue.get()
+        async with self.lock:
+            try:
+                # If there are previous responses, flush them out
+                while not self.queue.empty():
+                    await self.queue.get()
 
-            await self._write_data(request_data)
+                await self._write_data(request_data)
 
-            response_data = await self._read_data()
-            if response_data is None:
-                logger.error("Unable to communicate with device: '%s'", self.address)
+                response_data = await self._read_data()
+                if response_data is None:
+                    logger.error(
+                        "Unable to communicate with device: '%s'", self.address
+                    )
+                    return None
+
+            except asyncio.exceptions.CancelledError:
+                logger.debug("Received CancelledError")
                 return None
-
-        except asyncio.exceptions.CancelledError:
-            logger.debug("Received CancelledError")
-            return None
 
         return response_data
 
@@ -448,30 +452,31 @@ class BLEClient:
         max_attempts = 3
 
         for attempt in range(max_attempts):
-            try:
-                logger.debug("Retry attempt %d/%d", attempt + 1, max_attempts)
+            async with self.lock:
+                try:
+                    logger.debug("Retry attempt %d/%d", attempt + 1, max_attempts)
 
-                # If there are previous responses, flush them out
-                while not self.queue.empty():
-                    await self.queue.get()
+                    # If there are previous responses, flush them out
+                    while not self.queue.empty():
+                        await self.queue.get()
 
-                await self._write_data(request_data)
+                    await self._write_data(request_data)
 
-                # Use silent read on retry attempts, normal read on last attempt
-                if attempt < max_attempts - 1:
-                    response_data = await self._read_data_silent()
-                else:
-                    response_data = await self._read_data()
+                    # Use silent read on retry attempts, normal read on last attempt
+                    if attempt < max_attempts - 1:
+                        response_data = await self._read_data_silent()
+                    else:
+                        response_data = await self._read_data()
 
-                if response_data is not None:
-                    logger.debug("Got response on attempt %d", attempt + 1)
-                    return response_data
+                    if response_data is not None:
+                        logger.debug("Got response on attempt %d", attempt + 1)
+                        return response_data
 
-                logger.debug("No response on attempt %d", attempt + 1)
+                    logger.debug("No response on attempt %d", attempt + 1)
 
-            except asyncio.exceptions.CancelledError:
-                logger.debug("Received CancelledError")
-                return None
+                except asyncio.exceptions.CancelledError:
+                    logger.debug("Received CancelledError")
+                    return None
 
             # Wait before retrying (except on last attempt)
             if attempt < max_attempts - 1:
