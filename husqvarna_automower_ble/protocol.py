@@ -348,8 +348,7 @@ class BLEClient:
 
         if len(data) < 3:
             # We got such a small amount of data, let's try again
-            chunk = await self._get_response()
-            if chunk is None:
+            if (chunk := await self._get_response()) is None:
                 return None
             data += chunk
 
@@ -507,8 +506,11 @@ class BLEClient:
         logger.info("connected")
 
         logger.info("pairing device...")
-        await self.client.pair()
-        logger.info("paired")
+        try:
+            await self.client.pair()
+            logger.info("paired")
+        except Exception as err:
+            logger.debug("Pairing not completed, continuing anyway: %s", err)
 
         # This is not safe, _mtu_size is not defined in BaseBleakClient but may
         # be defined in subclasses.
@@ -518,7 +520,10 @@ class BLEClient:
             logger.debug("[Service] %s", service)
 
             for char in service.characteristics:
-                if "read" in char.properties:
+                if (
+                    "read" in char.properties
+                    and char.uuid != "98bd0003-0b0e-421a-84e5-ddbf75dc6de4"
+                ):
                     try:
                         value = await self.client.read_gatt_char(char.uuid)
                         logger.debug(
@@ -534,12 +539,6 @@ class BLEClient:
                             ",".join(char.properties),
                             e,
                         )
-                        if (
-                            char.uuid == "98bd0002-0b0e-421a-84e5-ddbf75dc6de4"
-                            or char.uuid == "98bd0003-0b0e-421a-84e5-ddbf75dc6de4"
-                        ):
-                            return ResponseResult.NOT_ALLOWED
-
                 else:
                     logger.debug(
                         "  [Characteristic] %s (%s)", char, ",".join(char.properties)
@@ -560,7 +559,11 @@ class BLEClient:
             logger.debug("Received: %s", str(binascii.hexlify(data)))
             await self.queue.put(data)
 
-        await self.client.start_notify(self.read_char, notification_handler)
+        try:
+            await self.client.start_notify(self.read_char, notification_handler)
+        except Exception:
+            await self.client.disconnect()
+            raise
 
         await asyncio.sleep(3.0)
 
@@ -630,6 +633,10 @@ class BLEClient:
                             ",".join(char.properties),
                             value,
                         )
+                        if char.uuid == "00002a00-0000-1000-8000-00805f9b34fb":
+                            model = value.decode()
+                        if char.uuid == "98bd0004-0b0e-421a-84e5-ddbf75dc6de4":
+                            device_type = value.rstrip(b"\x00").decode()
                     except Exception as e:
                         logger.error(
                             "  [Characteristic] %s (%s), Error: %s",
@@ -637,18 +644,9 @@ class BLEClient:
                             ",".join(char.properties),
                             e,
                         )
-
                 else:
                     logger.debug(
                         "  [Characteristic] %s (%s)", char, ",".join(char.properties)
-                    )
-
-                if char.uuid == "00002a00-0000-1000-8000-00805f9b34fb":
-                    model = (await client.read_gatt_char(char)).decode()
-
-                if char.uuid == "98bd0004-0b0e-421a-84e5-ddbf75dc6de4":
-                    device_type = (
-                        (await client.read_gatt_char(char)).rstrip(b"\x00").decode()
                     )
 
         await client.disconnect()
