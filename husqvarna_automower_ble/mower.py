@@ -128,30 +128,30 @@ class Mower(BLEClient):
     async def mower_mode(self) -> ModeOfOperation | None:
         """Query the mower mode"""
         mode = await self.command("GetMode")
-        if mode is None:
+        if not isinstance(mode, int):
             return None
-        return ModeOfOperation(mode) #type: ignore
+        return ModeOfOperation(mode)
 
     async def mower_state(self) -> MowerState | None:
         """Query the mower state"""
         state = await self.command("GetState")
-        if state is None:
+        if not isinstance(state, int):
             return None
-        return MowerState(state) #type: ignore
+        return MowerState(state)
 
     async def mower_activity(self) -> MowerActivity | None:
         """Query the mower activity"""
         activity = await self.command("GetActivity")
-        if activity is None:
+        if not isinstance(activity, int):
             return None
-        return MowerActivity(activity) #type: ignore
+        return MowerActivity(activity)
 
     async def mower_error(self) -> ErrorCodes | None:
         """Query the mower error"""
         error = await self.command("GetError")
-        if error is None:
+        if not isinstance(error, int):
             return None
-        return ErrorCodes(error) #type: ignore
+        return ErrorCodes(error)
 
     async def mower_next_start_time(self) -> datetime | None:
         """Query the mower next start time"""
@@ -336,7 +336,7 @@ async def main(mower: Mower, args: argparse.Namespace):
                     cmd_result = await mower.mower_resume()
                 case "override":
                     print("command=override")
-                    cmd_result = await mower.mower_override() #type: ignore[func-returns-value]
+                    cmd_result = await mower.mower_override()  # type: ignore[func-returns-value]
                 case _:
                     print(f"command=??? (Unknown command: {args.command})")
                     cmd_result = None
