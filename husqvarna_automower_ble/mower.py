@@ -130,28 +130,28 @@ class Mower(BLEClient):
         mode = await self.command("GetMode")
         if mode is None:
             return None
-        return ModeOfOperation(mode)
+        return ModeOfOperation(mode) #type: ignore
 
     async def mower_state(self) -> MowerState | None:
         """Query the mower state"""
         state = await self.command("GetState")
         if state is None:
             return None
-        return MowerState(state)
+        return MowerState(state) #type: ignore
 
     async def mower_activity(self) -> MowerActivity | None:
         """Query the mower activity"""
         activity = await self.command("GetActivity")
         if activity is None:
             return None
-        return MowerActivity(activity)
+        return MowerActivity(activity) #type: ignore
 
     async def mower_error(self) -> ErrorCodes | None:
         """Query the mower error"""
         error = await self.command("GetError")
         if error is None:
             return None
-        return ErrorCodes(error)
+        return ErrorCodes(error) #type: ignore
 
     async def mower_next_start_time(self) -> datetime | None:
         """Query the mower next start time"""
@@ -336,7 +336,7 @@ async def main(mower: Mower, args: argparse.Namespace):
                     cmd_result = await mower.mower_resume()
                 case "override":
                     print("command=override")
-                    cmd_result = await mower.mower_override()
+                    cmd_result = await mower.mower_override() #type: ignore[func-returns-value]
                 case _:
                     print(f"command=??? (Unknown command: {args.command})")
                     cmd_result = None
