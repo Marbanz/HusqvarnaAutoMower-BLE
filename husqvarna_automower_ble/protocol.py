@@ -664,13 +664,12 @@ class BLEClient:
         if client is None or read_char is None:
             return
 
-        await client.stop_notify(read_char)
-        await self.queue.put(None)
-
         logger.info("disconnecting...")
         await client.disconnect()
         self.client = None
         logger.info("disconnected")
+
+        await self.queue.put(None)
 
     def generate_request_setup_channel_id(self) -> bytearray:
         """
