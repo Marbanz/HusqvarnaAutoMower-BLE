@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 type ResponseScalar = int | str
 type ResponseDict = dict[str, ResponseScalar]
 type CommandResponse = ResponseScalar | ResponseDict | None
+type CommandResult = tuple[CommandResponse, bool]
 
 
 class Mower(BLEClient):
@@ -41,7 +42,7 @@ class Mower(BLEClient):
             command_name == "StartTrigger" and result == ResponseResult.UNKNOWN_ERROR
         )
 
-    async def command(self, command_name: str, **kwargs) -> CommandResponse:
+    async def command(self, command_name: str, **kwargs) -> CommandResult:
         """
         This function is used to simplify the communication of the mower using the commands found in protocol.json.
         It will send a request to the mower and then wait for a response. The response will be parsed and returned to the caller.
@@ -50,34 +51,34 @@ class Mower(BLEClient):
         command_definition = protocol.get(command_name)
         if command_definition is None:
             logger.warning("Unknown command: %s", command_name)
-            return None
+            return (None, False)
 
         command = Command(self.channel_id, command_definition)
         request = command.generate_request(**kwargs)
         response = await self._request_response(request)
         if response is None:
-            return None
+            return (None, False)
 
         if not command.validate_command_response(response):
             logger.warning("Response failed validation for command: %s", command_name)
-            return None
+            return (None, False)
 
         result = self.get_response_result(response)
         if not self._command_succeeded(command_name, result):
             logger.warning("Command failed: %s (%s)", command_name, result.name)
-            return None
+            return (None, False)
 
         response_dict = command.parse_response(response)
         if (
             response_dict is not None and len(response_dict) == 1
         ):  # If there is only one key in the response, return the value
-            return response_dict["response"]
-        return response_dict
+            return (response_dict["response"], True)
+        return (response_dict, True)
 
     async def get_manufacturer(self) -> str | None:
         """Get the mower manufacturer"""
-        model = await self.command("GetModel")
-        if not isinstance(model, dict):
+        model, ok = await self.command("GetModel")
+        if not ok or not isinstance(model, dict):
             return None
 
         device_type = model.get("deviceType")
@@ -93,8 +94,8 @@ class Mower(BLEClient):
 
     async def get_model(self) -> str | None:
         """Get the mower model."""
-        model = await self.command("GetModel")
-        if not isinstance(model, dict):
+        model, ok = await self.command("GetModel")
+        if not ok or not isinstance(model, dict):
             return None
 
         device_type = model.get("deviceType")
@@ -110,8 +111,8 @@ class Mower(BLEClient):
 
     async def get_serial_number(self) -> str | None:
         """Get the mower serial number."""
-        serial_number = await self.command("GetSerialNumber")
-        if serial_number is None:
+        serial_number, ok = await self.command("GetSerialNumber")
+        if not ok or serial_number is None:
             return None
         if isinstance(serial_number, int):
             return str(serial_number)
@@ -121,63 +122,71 @@ class Mower(BLEClient):
 
     async def mower_name(self) -> str | None:
         """Query the mower name."""
-        name = await self.command("GetUserMowerNameAsAsciiString")
-        return name if isinstance(name, str) else None
+        name, ok = await self.command("GetUserMowerNameAsAsciiString")
+        return name if ok and isinstance(name, str) else None
 
     async def battery_level(self) -> int | None:
         """Query the mower battery level."""
-        battery = await self.command("GetBatteryLevel")
-        return battery if isinstance(battery, int) else None
+        battery, ok = await self.command("GetBatteryLevel")
+        return battery if ok and isinstance(battery, int) else None
 
     async def is_charging(self) -> bool:
         """Check if the mower is charging."""
-        response = await self.command("IsCharging")
-        return bool(response) if response is not None else False
+        response, ok = await self.command("IsCharging")
+        return bool(response) if ok and response is not None else False
 
     async def mower_mode(self) -> ModeOfOperation | None:
         """Query the mower mode"""
-        mode = await self.command("GetMode")
-        if not isinstance(mode, int):
+        mode, ok = await self.command("GetMode")
+        if not ok or not isinstance(mode, int):
             return None
         return ModeOfOperation(mode)
 
     async def mower_state(self) -> MowerState | None:
         """Query the mower state"""
-        state = await self.command("GetState")
-        if not isinstance(state, int):
+        state, ok = await self.command("GetState")
+        if not ok or not isinstance(state, int):
             return None
         return MowerState(state)
 
     async def mower_activity(self) -> MowerActivity | None:
         """Query the mower activity"""
-        activity = await self.command("GetActivity")
-        if not isinstance(activity, int):
+        activity, ok = await self.command("GetActivity")
+        if not ok or not isinstance(activity, int):
             return None
         return MowerActivity(activity)
 
     async def mower_error(self) -> ErrorCodes | None:
         """Query the mower error"""
-        error = await self.command("GetError")
-        if not isinstance(error, int):
+        error, ok = await self.command("GetError")
+        if not ok or not isinstance(error, int):
             return None
         return ErrorCodes(error)
 
     async def mower_next_start_time(self) -> dt.datetime | None:
         """Query the mower next start time"""
-        next_start_time = await self.command("GetNextStartTime")
-        if not isinstance(next_start_time, int) or next_start_time == 0:
+        next_start_time, ok = await self.command("GetNextStartTime")
+        if not ok or not isinstance(next_start_time, int) or next_start_time == 0:
             return None
         return dt.datetime.fromtimestamp(next_start_time, dt.UTC).replace(tzinfo=None)
 
     async def mower_statistics(self) -> dict | None:
         """Query the mower statistics"""
+        # Retrieve each statistic and set to None when the command failed
+        running, ok = await self.command("GetTotalRunningTime")
+        cutting, ok2 = await self.command("GetTotalCuttingTime")
+        charging, ok3 = await self.command("GetTotalChargingTime")
+        searching, ok4 = await self.command("GetTotalSearchingTime")
+        collisions, ok5 = await self.command("GetNumberOfCollisions")
+        cycles, ok6 = await self.command("GetNumberOfChargingCycles")
+
         stats = {
-            "totalRunningTime": await self.command("GetTotalRunningTime"),
-            "totalCuttingTime": await self.command("GetTotalCuttingTime"),
-            "totalChargingTime": await self.command("GetTotalChargingTime"),
-            "totalSearchingTime": await self.command("GetTotalSearchingTime"),
-            "numberOfCollisions": await self.command("GetNumberOfCollisions"),
-            "numberOfChargingCycles": await self.command("GetNumberOfChargingCycles"),
+            "totalRunningTime": running if ok else None,
+            "totalCuttingTime": cutting if ok2 else None,
+            "totalChargingTime": charging if ok3 else None,
+            "totalSearchingTime": searching if ok4 else None,
+            "numberOfCollisions": collisions if ok5 else None,
+            "numberOfChargingCycles": cycles if ok6 else None,
         }
 
         # Check if all statistics are retrieved successfully
@@ -190,8 +199,8 @@ class Mower(BLEClient):
         """
         Get information about a specific task
         """
-        task = await self.command("GetTask", taskId=taskid)
-        if not isinstance(task, dict):
+        task, ok = await self.command("GetTask", taskId=taskid)
+        if not ok or not isinstance(task, dict):
             return None
 
         start = task.get("start")
@@ -232,41 +241,64 @@ class Mower(BLEClient):
             use_on_sunday,
         )
 
-    async def mower_override(self, duration_hours: float = 3.0) -> None:
+    async def mower_override(self, duration_hours: float = 3.0) -> bool:
         """
         Force the mower to run for the specified duration in hours.
         """
         if duration_hours <= 0:
             raise ValueError("Duration must be greater than 0")
 
-        await self.command("SetMode", mode=ModeOfOperation.AUTO)
-        await self.command("SetOverrideMow", duration=int(duration_hours * 3600))
-        await self.command("StartTrigger")
+        _, ok1 = await self.command("SetMode", mode=ModeOfOperation.AUTO)
+        _, ok2 = await self.command(
+            "SetOverrideMow", duration=int(duration_hours * 3600)
+        )
+        _, ok3 = await self.command("StartTrigger")
+        return ok1 and ok2 and ok3
 
-    async def mower_pause(self):
-        """Pause the mower's current operation"""
-        await self.command("Pause")
+    async def mower_pause(self) -> bool:
+        """Pause the mower's current operation
 
-    async def mower_resume(self):
-        """Resume the mower's operation"""
-        await self.command("StartTrigger")
+        Returns True if the command succeeded.
+        """
+        _, ok = await self.command("Pause")
+        return ok
 
-    async def mower_park(self):
-        """Park the mower until the next scheduled start"""
-        await self.command("SetOverrideParkUntilNextStart")
-        await self.command("StartTrigger")
+    async def mower_resume(self) -> bool:
+        """Resume the mower's operation
 
-    async def mower_park_indefinitely(self):
-        """Park the mower indefinitely"""
-        await self.command("ClearOverride")
-        await self.command("SetMode", mode=ModeOfOperation.HOME)
-        await self.command("StartTrigger")
+        Returns True if the command succeeded.
+        """
+        _, ok = await self.command("StartTrigger")
+        return ok
 
-    async def mower_auto(self):
-        """Set the mower to automatic operation"""
-        await self.command("ClearOverride")
-        await self.command("SetMode", mode=ModeOfOperation.AUTO)
-        await self.command("StartTrigger")
+    async def mower_park(self) -> bool:
+        """Park the mower until the next scheduled start
+
+        Returns True if the commands succeeded.
+        """
+        _, ok1 = await self.command("SetOverrideParkUntilNextStart")
+        _, ok2 = await self.command("StartTrigger")
+        return ok1 and ok2
+
+    async def mower_park_indefinitely(self) -> bool:
+        """Park the mower indefinitely
+
+        Returns True if the commands succeeded.
+        """
+        _, ok1 = await self.command("ClearOverride")
+        _, ok2 = await self.command("SetMode", mode=ModeOfOperation.HOME)
+        _, ok3 = await self.command("StartTrigger")
+        return ok1 and ok2 and ok3
+
+    async def mower_auto(self) -> bool:
+        """Set the mower to automatic operation
+
+        Returns True if the commands succeeded.
+        """
+        _, ok1 = await self.command("ClearOverride")
+        _, ok2 = await self.command("SetMode", mode=ModeOfOperation.AUTO)
+        _, ok3 = await self.command("StartTrigger")
+        return ok1 and ok2 and ok3
 
 
 async def main(mower: Mower, args: argparse.Namespace):
@@ -345,7 +377,7 @@ async def main(mower: Mower, args: argparse.Namespace):
                     cmd_result = await mower.mower_resume()
                 case "override":
                     print("command=override")
-                    cmd_result = await mower.mower_override()  # type: ignore[func-returns-value]
+                    cmd_result = await mower.mower_override()
                 case _:
                     print(f"command=??? (Unknown command: {args.command})")
                     cmd_result = None
