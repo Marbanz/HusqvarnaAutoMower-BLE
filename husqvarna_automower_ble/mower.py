@@ -380,7 +380,7 @@ async def main(mower: Mower, args: argparse.Namespace):
                     cmd_result = await mower.mower_override()
                 case _:
                     print(f"command=??? (Unknown command: {args.command})")
-                    cmd_result = None
+                    cmd_result = False
             print(f"command result = {cmd_result}")
 
     finally:
