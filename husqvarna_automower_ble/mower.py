@@ -7,7 +7,7 @@ how the request and response classes can be used.
 import argparse
 import asyncio
 import logging
-from datetime import datetime, UTC
+import datetime as dt
 
 from husqvarna_automower_ble.protocol import (
     BLEClient,
@@ -34,12 +34,25 @@ class Mower(BLEClient):
     def __init__(self, channel_id: int, address: str, pin: int | None = None):
         super().__init__(channel_id, address, pin)
 
+    @staticmethod
+    def _command_succeeded(command_name: str, result: ResponseResult) -> bool:
+        # The StartTrigger command can return UNKNOWN_ERROR even when it succeeds
+        return result == ResponseResult.OK or (
+            command_name == "StartTrigger" and result == ResponseResult.UNKNOWN_ERROR
+        )
+
     async def command(self, command_name: str, **kwargs) -> CommandResponse:
         """
         This function is used to simplify the communication of the mower using the commands found in protocol.json.
         It will send a request to the mower and then wait for a response. The response will be parsed and returned to the caller.
         """
-        command = Command(self.channel_id, (await self.get_protocol())[command_name])
+        protocol = await self.get_protocol()
+        command_definition = protocol.get(command_name)
+        if command_definition is None:
+            logger.warning("Unknown command: %s", command_name)
+            return None
+
+        command = Command(self.channel_id, command_definition)
         request = command.generate_request(**kwargs)
         response = await self._request_response(request)
         if response is None:
@@ -49,12 +62,8 @@ class Mower(BLEClient):
             logger.warning("Response failed validation for command: %s", command_name)
             return None
 
-        # The StartTrigger command can return UNKNOWN_ERROR even when it succeeds.
         result = self.get_response_result(response)
-        command_succeeded = result == ResponseResult.OK or (
-            command_name == "StartTrigger" and result == ResponseResult.UNKNOWN_ERROR
-        )
-        if not command_succeeded:
+        if not self._command_succeeded(command_name, result):
             logger.warning("Command failed: %s (%s)", command_name, result.name)
             return None
 
@@ -153,12 +162,12 @@ class Mower(BLEClient):
             return None
         return ErrorCodes(error)
 
-    async def mower_next_start_time(self) -> datetime | None:
+    async def mower_next_start_time(self) -> dt.datetime | None:
         """Query the mower next start time"""
         next_start_time = await self.command("GetNextStartTime")
         if not isinstance(next_start_time, int) or next_start_time == 0:
             return None
-        return datetime.fromtimestamp(next_start_time, UTC).replace(tzinfo=None)
+        return dt.datetime.fromtimestamp(next_start_time, dt.UTC).replace(tzinfo=None)
 
     async def mower_statistics(self) -> dict | None:
         """Query the mower statistics"""

@@ -276,9 +276,9 @@ class BLEClient:
         self.queue: asyncio.Queue[bytearray | None] = asyncio.Queue()
 
         self.client: BleakClient | None = None
+        self.protocol = None
         self.write_char: BleakGATTCharacteristic | None = None
         self.read_char: BleakGATTCharacteristic | None = None
-        self.protocol = None
 
     async def get_protocol(self):
         if self.protocol is None:
@@ -593,11 +593,10 @@ class BLEClient:
                 return ResponseResult.UNKNOWN_ERROR
             result = self.get_response_result(response)
             # If the result is UNKNOWN_ERROR, assume the pin was invalid
-            return (
-                ResponseResult.INVALID_PIN
-                if result == ResponseResult.UNKNOWN_ERROR
-                else result
-            )
+            if result == ResponseResult.UNKNOWN_ERROR:
+                return ResponseResult.INVALID_PIN
+
+            return result
 
         return ResponseResult.OK
 
