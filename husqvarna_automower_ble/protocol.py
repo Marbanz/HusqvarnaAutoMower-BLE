@@ -347,7 +347,7 @@ class BLEClient:
 
     async def _get_response(self) -> bytearray | None:
         try:
-            data = await asyncio.wait_for(self.queue.get(), timeout=10)
+            data = await asyncio.wait_for(self.queue.get(), timeout=5)
 
         except TimeoutError:
             logger.warning("Unable to get response from device: '%s'", self.address)
@@ -358,7 +358,7 @@ class BLEClient:
     async def _get_response_silent(self) -> bytearray | None:
         """Get response with debug-level logging (for retry scenarios)"""
         try:
-            data = await asyncio.wait_for(self.queue.get(), timeout=10)
+            data = await asyncio.wait_for(self.queue.get(), timeout=5)
 
         except TimeoutError:
             logger.debug(
