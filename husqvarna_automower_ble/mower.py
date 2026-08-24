@@ -34,6 +34,7 @@ type CommandResult = tuple[CommandResponse, bool]
 class Mower(BLEClient):
     def __init__(self, channel_id: int, address: str, pin: int | None = None):
         super().__init__(channel_id, address, pin)
+        self.command_lock = asyncio.Lock()
 
     @staticmethod
     def _command_succeeded(command_name: str, result: ResponseResult) -> bool:
@@ -43,6 +44,10 @@ class Mower(BLEClient):
         )
 
     async def command(self, command_name: str, **kwargs) -> CommandResult:
+        async with self.command_lock:
+            return await self._command(command_name, **kwargs)
+
+    async def _command(self, command_name: str, **kwargs) -> CommandResult:
         """
         This function is used to simplify the communication of the mower using the commands found in protocol.json.
         It will send a request to the mower and then wait for a response. The response will be parsed and returned to the caller.
@@ -188,12 +193,13 @@ class Mower(BLEClient):
     async def mower_statistics(self) -> dict | None:
         """Query the mower statistics"""
         # Retrieve each statistic and set to None when the command failed
-        running, ok = await self.command("GetTotalRunningTime")
-        cutting, ok2 = await self.command("GetTotalCuttingTime")
-        charging, ok3 = await self.command("GetTotalChargingTime")
-        searching, ok4 = await self.command("GetTotalSearchingTime")
-        collisions, ok5 = await self.command("GetNumberOfCollisions")
-        cycles, ok6 = await self.command("GetNumberOfChargingCycles")
+        async with self.command_lock:
+            running, ok = await self._command("GetTotalRunningTime")
+            cutting, ok2 = await self._command("GetTotalCuttingTime")
+            charging, ok3 = await self._command("GetTotalChargingTime")
+            searching, ok4 = await self._command("GetTotalSearchingTime")
+            collisions, ok5 = await self._command("GetNumberOfCollisions")
+            cycles, ok6 = await self._command("GetNumberOfChargingCycles")
 
         stats = {
             "totalRunningTime": running if ok else None,
@@ -217,11 +223,12 @@ class Mower(BLEClient):
         if duration_hours <= 0:
             raise ValueError("Duration must be greater than 0")
 
-        _, ok1 = await self.command("SetMode", mode=ModeOfOperation.AUTO)
-        _, ok2 = await self.command(
-            "SetOverrideMow", duration=int(duration_hours * 3600)
-        )
-        _, ok3 = await self.command("StartTrigger")
+        async with self.command_lock:
+            _, ok1 = await self._command("SetMode", mode=ModeOfOperation.AUTO)
+            _, ok2 = await self._command(
+                "SetOverrideMow", duration=int(duration_hours * 3600)
+            )
+            _, ok3 = await self._command("StartTrigger")
         return ok1 and ok2 and ok3
 
     async def mower_pause(self) -> bool:
@@ -245,8 +252,9 @@ class Mower(BLEClient):
 
         Returns True if the commands succeeded.
         """
-        _, ok1 = await self.command("SetOverrideParkUntilNextStart")
-        _, ok2 = await self.command("StartTrigger")
+        async with self.command_lock:
+            _, ok1 = await self._command("SetOverrideParkUntilNextStart")
+            _, ok2 = await self._command("StartTrigger")
         return ok1 and ok2
 
     async def mower_park_indefinitely(self) -> bool:
@@ -254,9 +262,10 @@ class Mower(BLEClient):
 
         Returns True if the commands succeeded.
         """
-        _, ok1 = await self.command("ClearOverride")
-        _, ok2 = await self.command("SetMode", mode=ModeOfOperation.HOME)
-        _, ok3 = await self.command("StartTrigger")
+        async with self.command_lock:
+            _, ok1 = await self._command("ClearOverride")
+            _, ok2 = await self._command("SetMode", mode=ModeOfOperation.HOME)
+            _, ok3 = await self._command("StartTrigger")
         return ok1 and ok2 and ok3
 
     async def mower_auto(self) -> bool:
@@ -264,9 +273,10 @@ class Mower(BLEClient):
 
         Returns True if the commands succeeded.
         """
-        _, ok1 = await self.command("ClearOverride")
-        _, ok2 = await self.command("SetMode", mode=ModeOfOperation.AUTO)
-        _, ok3 = await self.command("StartTrigger")
+        async with self.command_lock:
+            _, ok1 = await self._command("ClearOverride")
+            _, ok2 = await self._command("SetMode", mode=ModeOfOperation.AUTO)
+            _, ok3 = await self._command("StartTrigger")
         return ok1 and ok2 and ok3
 
 
