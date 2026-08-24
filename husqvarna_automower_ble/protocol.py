@@ -1,10 +1,11 @@
 import binascii
-from husqvarna_automower_ble.helpers import crc
+from .helpers import crc
 from enum import IntEnum
 import asyncio
 import logging
 import json
 from importlib.resources import files
+from bleak.exc import BleakError
 from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak_retry_connector import establish_connection, BleakClientWithServiceCache
 from typing import TYPE_CHECKING
@@ -13,6 +14,15 @@ if TYPE_CHECKING:
     from bleak import BleakClient
 
 logger = logging.getLogger(__name__)
+
+WRITE_CHAR = "98bd0002-0b0e-421a-84e5-ddbf75dc6de4"
+READ_CHAR = "98bd0003-0b0e-421a-84e5-ddbf75dc6de4"
+PROTOCOL_DESCRIPTOR_CHAR = "98bd0004-0b0e-421a-84e5-ddbf75dc6de4"
+GATT_AUTH_ERROR_TEXT = (
+    "Insufficient authentication",
+    "Insufficient authorization",
+    "Insufficient encryption",
+)
 
 
 class ModeOfOperation(IntEnum):
@@ -73,11 +83,23 @@ class ResponseResult(IntEnum):
     MOWER_BLOCKED = 10
 
 
+def _response_result_label(value: int) -> str:
+    try:
+        result = ResponseResult(value)
+    except ValueError:
+        return f"UNKNOWN_RESULT({value})"
+    return f"{result.name}({value})"
+
+
+def _is_gatt_auth_error(err: Exception) -> bool:
+    return any(text in str(err) for text in GATT_AUTH_ERROR_TEXT)
+
+
 class TaskInformation:
     def __init__(
         self,
-        next_start_time,
-        duration_in_seconds,
+        start_time_in_minutes,
+        duration_in_minutes,
         on_monday,
         on_tuesday,
         on_wednesday,
@@ -86,8 +108,8 @@ class TaskInformation:
         on_saturday,
         on_sunday,
     ):
-        self.next_start_time = next_start_time
-        self.duration_in_seconds = duration_in_seconds
+        self.start_time_in_minutes = start_time_in_minutes
+        self.duration_in_minutes = duration_in_minutes
         self.on_monday = on_monday
         self.on_tuesday = on_tuesday
         self.on_wednesday = on_wednesday
@@ -165,6 +187,11 @@ class Command:
                 elif request_type == "uint8":
                     request_length += 1
                     request_data += kwargs[request_name].to_bytes(1, byteorder="little")
+                elif request_type == "bool":
+                    request_length += 1
+                    request_data += (1 if kwargs[request_name] else 0).to_bytes(
+                        1, byteorder="little"
+                    )
                 else:
                     raise ValueError("Unknown request type: " + request_type)
         self.request_data[16] = request_length
@@ -201,6 +228,14 @@ class Command:
                     data[dpos : dpos + 2], byteorder="little"
                 )
                 dpos += 2
+            elif dtype == "sint16":
+                response[name] = int.from_bytes(
+                    data[dpos : dpos + 2], byteorder="little", signed=True
+                )
+                dpos += 2
+            elif dtype == "remaining_uint":
+                response[name] = int.from_bytes(data[dpos:], byteorder="little")
+                dpos = len(data)
             elif (dtype == "uint8") or (dtype == "bool"):
                 response[name] = data[dpos]
                 dpos += 1
@@ -212,6 +247,16 @@ class Command:
                 response[name] = data.decode("ascii").rstrip(
                     "\x00"
                 )  # Remove trailing null bytes
+                dpos += len(data)
+            elif dtype == "utf16":
+                if len(self.response_data_type) != 1:
+                    raise ValueError(
+                        "UTF-16 response type can currently only be used when there is only one response type"
+                    )
+                try:
+                    response[name] = data.decode("utf-16-le").rstrip("\x00")
+                except UnicodeDecodeError as err:
+                    raise ValueError("Unable to decode UTF-16 response") from err
                 dpos += len(data)
             else:
                 raise ValueError("Unknown data type: " + dtype)
@@ -260,7 +305,12 @@ class Command:
         if (
             response_data[16] != 0x00
         ):  # result: OK(0), UNKNOWN_ERROR(1), INVALID_VALUE(2), OUT_OF_RANGE(3), NOT_AVAILABLE(4), NOT_ALLOWED(5), INVALID_GROUP(6), INVALID_ID(7), DEVICE_BUSY(8), INVALID_PIN(9), MOWER_BLOCKED(10);
-            logger.debug("Non zero response result: %d", response_data[16])
+            logger.warning(
+                "Command %d/%d returned %s",
+                self.major,
+                self.minor,
+                _response_result_label(response_data[16]),
+            )
 
         return True
 
@@ -279,16 +329,15 @@ class BLEClient:
         self.protocol = None
         self.write_char: BleakGATTCharacteristic | None = None
         self.read_char: BleakGATTCharacteristic | None = None
+        self._notify_started = False
 
     async def get_protocol(self):
         if self.protocol is None:
 
             def read_protocol_file():
-                with (
-                    files("husqvarna_automower_ble")
-                    .joinpath("protocol.json")
-                    .open("r") as f
-                ):
+                protocol_file = files(__package__).joinpath("protocol.json")
+                logger.debug("Loading protocol from %s", protocol_file)
+                with protocol_file.open("r") as f:
                     return json.load(f)
 
             self.protocol = await asyncio.get_running_loop().run_in_executor(
@@ -301,10 +350,7 @@ class BLEClient:
             data = await asyncio.wait_for(self.queue.get(), timeout=10)
 
         except TimeoutError:
-            logger.error("Unable to get response from device: '%s'", self.address)
-            return None
-
-        if data is None:
+            logger.warning("Unable to get response from device: '%s'", self.address)
             return None
 
         return data
@@ -313,13 +359,11 @@ class BLEClient:
         """Get response with debug-level logging (for retry scenarios)"""
         try:
             data = await asyncio.wait_for(self.queue.get(), timeout=10)
+
         except TimeoutError:
             logger.debug(
                 "Unable to get response from device (retry attempt): '%s'", self.address
             )
-            return None
-
-        if data is None:
             return None
 
         return data
@@ -327,16 +371,14 @@ class BLEClient:
     async def _write_data(self, data):
         logger.debug("Writing: %s", str(binascii.hexlify(data)))
 
-        client = self.client
-        write_char = self.write_char
-        if client is None or write_char is None:
+        if self.client is None or self.write_char is None:
             raise RuntimeError("BLE client is not connected")
 
         chunk_size = self.MTU_SIZE - 3
         for chunk in (
             data[i : i + chunk_size] for i in range(0, len(data), chunk_size)
         ):
-            await client.write_gatt_char(write_char, chunk, response=False)
+            await self.client.write_gatt_char(self.write_char, chunk, response=False)
 
         logger.debug("Finished writing")
 
@@ -346,15 +388,29 @@ class BLEClient:
         if data is None:
             return None
 
-        if len(data) < 3:
-            # We got such a small amount of data, let's try again
-            if (chunk := await self._get_response()) is None:
+        while data and data[0] != 0x02:
+            packet_start = data.find(b"\x02")
+            if packet_start >= 0:
+                logger.debug(
+                    "Discarding stale response prefix: %s",
+                    binascii.hexlify(data[:packet_start]),
+                )
+                data = data[packet_start:]
+                break
+
+            logger.debug(
+                "Discarding stale response fragment: %s", binascii.hexlify(data)
+            )
+            data = await self._get_response()
+            if data is None:
+                return None
+
+        while len(data) < 3:
+            # We got such a small amount of data, let's try again.
+            chunk = await self._get_response()
+            if chunk is None:
                 return None
             data += chunk
-
-            if len(data) < 3:
-                # Something is wrong
-                return None
 
         length = data[2] + 4
 
@@ -368,9 +424,9 @@ class BLEClient:
                 data += chunk
             except TimeoutError:
                 logger.error(
-                    "Unable to get full response from device: '%s', currently have %s",
-                    str(binascii.hexlify(data)),
+                    "Unable to get full response from device '%s', currently have %s",
                     self.address,
+                    str(binascii.hexlify(data)),
                 )
                 logger.error("Expecting %d bytes, only have %d", length, len(data))
                 return None
@@ -386,16 +442,29 @@ class BLEClient:
         if data is None:
             return None
 
-        if len(data) < 3:
-            # We got such a small amount of data, let's try again
+        while data and data[0] != 0x02:
+            packet_start = data.find(b"\x02")
+            if packet_start >= 0:
+                logger.debug(
+                    "Discarding stale response prefix: %s",
+                    binascii.hexlify(data[:packet_start]),
+                )
+                data = data[packet_start:]
+                break
+
+            logger.debug(
+                "Discarding stale response fragment: %s", binascii.hexlify(data)
+            )
+            data = await self._get_response_silent()
+            if data is None:
+                return None
+
+        while len(data) < 3:
+            # We got such a small amount of data, let's try again.
             chunk = await self._get_response_silent()
             if chunk is None:
                 return None
             data += chunk
-
-            if len(data) < 3:
-                # Something is wrong
-                return None
 
         length = data[2] + 4
 
@@ -410,8 +479,8 @@ class BLEClient:
             except TimeoutError:
                 logger.debug(
                     "Unable to get full response from device (retry attempt): '%s', currently have %s",
-                    str(binascii.hexlify(data)),
                     self.address,
+                    str(binascii.hexlify(data)),
                 )
                 logger.debug("Expecting %d bytes, only have %d", length, len(data))
                 return None
@@ -431,14 +500,23 @@ class BLEClient:
 
                 response_data = await self._read_data()
                 if response_data is None:
-                    logger.error(
+                    logger.warning(
                         "Unable to communicate with device: '%s'", self.address
                     )
+                    if self.is_connected():
+                        await self.disconnect()
                     return None
 
             except asyncio.exceptions.CancelledError:
                 logger.debug("Received CancelledError")
+                if self.is_connected():
+                    await self.disconnect()
                 return None
+            except BleakError as err:
+                logger.warning("BLE communication failed: %s", err)
+                if self.is_connected():
+                    await self.disconnect()
+                raise
 
         return response_data
 
@@ -450,8 +528,8 @@ class BLEClient:
         """
         max_attempts = 3
 
-        for attempt in range(max_attempts):
-            async with self.lock:
+        async with self.lock:
+            for attempt in range(max_attempts):
                 try:
                     logger.debug("Retry attempt %d/%d", attempt + 1, max_attempts)
 
@@ -475,14 +553,23 @@ class BLEClient:
 
                 except asyncio.exceptions.CancelledError:
                     logger.debug("Received CancelledError")
+                    if self.is_connected():
+                        await self.disconnect()
                     return None
+                except BleakError as err:
+                    logger.warning("BLE communication failed: %s", err)
+                    if self.is_connected():
+                        await self.disconnect()
+                    raise
 
-            # Wait before retrying (except on last attempt)
-            if attempt < max_attempts - 1:
-                logger.debug("Waiting 1 seconds before retry...")
-                await asyncio.sleep(1)
+                # Wait before retrying (except on last attempt)
+                if attempt < max_attempts - 1:
+                    logger.debug("Waiting 1 seconds before retry...")
+                    await asyncio.sleep(1)
 
-        logger.error("Unable to communicate with device: '%s'", self.address)
+        logger.warning("Unable to communicate with device: '%s'", self.address)
+        if self.is_connected():
+            await self.disconnect()
         return None
 
     async def connect(self, device) -> ResponseResult:
@@ -491,11 +578,19 @@ class BLEClient:
 
         Returns a ResponseResult
         """
+        if self.is_connected():
+            logger.debug("Already connected")
+            return ResponseResult.OK
+
         logger.info("starting scan...")
 
         if device is None:
-            logger.error("could not find device with address '%s'", self.address)
+            logger.warning("Could not find device with address '%s'", self.address)
             return ResponseResult.UNKNOWN_ERROR
+
+        self.write_char = None
+        self.read_char = None
+        self._notify_started = False
 
         logger.info("connecting to device...")
         self.client = await establish_connection(
@@ -509,8 +604,10 @@ class BLEClient:
         try:
             await self.client.pair()
             logger.info("paired")
-        except Exception as err:
-            logger.debug("Pairing not completed, continuing anyway: %s", err)
+        except BleakError as err:
+            logger.info("Pairing failed, continuing with protocol handshake: %s", err)
+            if not self.client.is_connected:
+                return ResponseResult.UNKNOWN_ERROR
 
         # This is not safe, _mtu_size is not defined in BaseBleakClient but may
         # be defined in subclasses.
@@ -520,10 +617,21 @@ class BLEClient:
             logger.debug("[Service] %s", service)
 
             for char in service.characteristics:
-                if (
-                    "read" in char.properties
-                    and char.uuid != "98bd0003-0b0e-421a-84e5-ddbf75dc6de4"
-                ):
+                if char.uuid == WRITE_CHAR:
+                    self.write_char = char
+
+                if char.uuid == READ_CHAR:
+                    self.read_char = char
+
+                if char.uuid in (WRITE_CHAR, READ_CHAR):
+                    logger.debug(
+                        "  [Characteristic] %s (%s)",
+                        char,
+                        ",".join(char.properties),
+                    )
+                    continue
+
+                if "read" in char.properties:
                     try:
                         value = await self.client.read_gatt_char(char.uuid)
                         logger.debug(
@@ -533,7 +641,7 @@ class BLEClient:
                             value,
                         )
                     except Exception as e:
-                        logger.error(
+                        logger.debug(
                             "  [Characteristic] %s (%s), Error: %s",
                             char,
                             ",".join(char.properties),
@@ -543,15 +651,6 @@ class BLEClient:
                     logger.debug(
                         "  [Characteristic] %s (%s)", char, ",".join(char.properties)
                     )
-                if char.uuid == "98bd0002-0b0e-421a-84e5-ddbf75dc6de4":
-                    self.write_char = char
-
-                if char.uuid == "98bd0003-0b0e-421a-84e5-ddbf75dc6de4":
-                    self.read_char = char
-
-        if self.write_char is None or self.read_char is None:
-            logger.error("Could not find required write/read BLE characteristics")
-            return ResponseResult.NOT_AVAILABLE
 
         async def notification_handler(
             characteristic: BleakGATTCharacteristic, data: bytearray
@@ -559,11 +658,40 @@ class BLEClient:
             logger.debug("Received: %s", str(binascii.hexlify(data)))
             await self.queue.put(data)
 
+        if self.write_char is None or self.read_char is None:
+            logger.error("Could not find required write/read BLE characteristics")
+            if self.is_connected():
+                await self.disconnect()
+            return ResponseResult.NOT_AVAILABLE
+
         try:
             await self.client.start_notify(self.read_char, notification_handler)
-        except Exception:
-            await self.client.disconnect()
-            raise
+            self._notify_started = True
+        except BleakError as err:
+            if _is_gatt_auth_error(err):
+                logger.info(
+                    "Notification subscription needs BLE authentication; "
+                    "retrying pairing once"
+                )
+                try:
+                    await self.client.pair()
+                    await asyncio.sleep(1.0)
+                    await self.client.start_notify(self.read_char, notification_handler)
+                    self._notify_started = True
+                except BleakError as retry_err:
+                    logger.warning(
+                        "Unable to subscribe to mower notifications after "
+                        "pairing retry: %s",
+                        retry_err,
+                    )
+                    if self.is_connected():
+                        await self.disconnect()
+                    return ResponseResult.NOT_ALLOWED
+            else:
+                logger.warning("Unable to subscribe to mower notifications: %s", err)
+                if self.is_connected():
+                    await self.disconnect()
+                return ResponseResult.NOT_ALLOWED
 
         await asyncio.sleep(3.0)
 
@@ -605,6 +733,9 @@ class BLEClient:
 
     async def probe_gatts(self, device):
         logger.info("connecting to device...")
+        if device is None:
+            raise BleakError(f"Could not find device with address '{self.address}'")
+
         client = await establish_connection(
             BleakClientWithServiceCache,
             device,
@@ -616,39 +747,58 @@ class BLEClient:
         model = None
         device_type = None
 
-        for service in client.services:
-            logger.debug("[Service] %s", service)
+        try:
+            for service in client.services:
+                logger.debug("[Service] %s", service)
 
-            if service.uuid == "98bd0001-0b0e-421a-84e5-ddbf75dc6de4":
-                manufacture = service.description
+                if service.uuid == "98bd0001-0b0e-421a-84e5-ddbf75dc6de4":
+                    manufacture = service.description
 
-            for char in service.characteristics:
-                if "read" in char.properties:
-                    try:
-                        value = await client.read_gatt_char(char.uuid)
-                        logger.debug(
-                            "  [Characteristic] %s (%s), Value: %r",
-                            char,
-                            ",".join(char.properties),
-                            value,
-                        )
-                        if char.uuid == "00002a00-0000-1000-8000-00805f9b34fb":
-                            model = value.decode()
-                        if char.uuid == "98bd0004-0b0e-421a-84e5-ddbf75dc6de4":
-                            device_type = value.rstrip(b"\x00").decode()
-                    except Exception as e:
-                        logger.error(
-                            "  [Characteristic] %s (%s), Error: %s",
-                            char,
-                            ",".join(char.properties),
-                            e,
-                        )
-                else:
-                    logger.debug(
-                        "  [Characteristic] %s (%s)", char, ",".join(char.properties)
+                for char in service.characteristics:
+                    properties = ",".join(char.properties)
+                    should_read = char.uuid in (
+                        "00002a00-0000-1000-8000-00805f9b34fb",
+                        PROTOCOL_DESCRIPTOR_CHAR,
                     )
 
-        await client.disconnect()
+                    if char.uuid in (WRITE_CHAR, READ_CHAR):
+                        logger.debug("  [Characteristic] %s (%s)", char, properties)
+                        continue
+
+                    if "read" in char.properties and should_read:
+                        try:
+                            value = await client.read_gatt_char(char.uuid)
+                            logger.debug(
+                                "  [Characteristic] %s (%s), Value: %r",
+                                char,
+                                properties,
+                                value,
+                            )
+                        except Exception as e:
+                            logger.debug(
+                                "  [Characteristic] %s (%s), Error: %s",
+                                char,
+                                properties,
+                                e,
+                            )
+                            continue
+
+                        if char.uuid == "00002a00-0000-1000-8000-00805f9b34fb":
+                            model = value.decode()
+
+                        if char.uuid == PROTOCOL_DESCRIPTOR_CHAR:
+                            device_type = value.rstrip(b"\x00").decode()
+
+                    elif "read" in char.properties:
+                        logger.debug(
+                            "  [Characteristic] %s (%s), Value skipped during probe",
+                            char,
+                            properties,
+                        )
+                    else:
+                        logger.debug("  [Characteristic] %s (%s)", char, properties)
+        finally:
+            await client.disconnect()
 
         return (manufacture, device_type, model)
 
@@ -658,15 +808,16 @@ class BLEClient:
         `connect()` before the Python script exits
         """
 
-        client = self.client
-        read_char = self.read_char
-        if client is None or read_char is None:
+        if self.client is None or self.read_char is None:
             return
 
         logger.info("disconnecting...")
-        await client.disconnect()
-        self.client = None
+        await self.client.disconnect()
         logger.info("disconnected")
+        self.client = None
+        self.write_char = None
+        self.read_char = None
+        self._notify_started = False
 
         await self.queue.put(None)
 

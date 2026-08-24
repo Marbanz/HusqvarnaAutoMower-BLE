@@ -15,8 +15,8 @@ from husqvarna_automower_ble.protocol import (
     MowerState,
     MowerActivity,
     ModeOfOperation,
+    OverrideAction,
     ResponseResult,
-    TaskInformation,
 )
 from husqvarna_automower_ble.models import MowerModels
 from husqvarna_automower_ble.error_codes import ErrorCodes
@@ -50,7 +50,7 @@ class Mower(BLEClient):
         protocol = await self.get_protocol()
         command_definition = protocol.get(command_name)
         if command_definition is None:
-            logger.warning("Unknown command: %s", command_name)
+            logger.error("Unknown command: %s", command_name)
             return (None, False)
 
         command = Command(self.channel_id, command_definition)
@@ -156,6 +156,21 @@ class Mower(BLEClient):
             return None
         return MowerActivity(activity)
 
+    async def mower_override_status(self) -> OverrideAction | None:
+        """Query the mower override status"""
+        override, ok = await self.command("GetOverride")
+        if not ok or not isinstance(override, dict):
+            return None
+
+        action = override.get("action")
+        if not isinstance(action, int):
+            return None
+
+        try:
+            return OverrideAction(action)
+        except ValueError:
+            return None
+
     async def mower_error(self) -> ErrorCodes | None:
         """Query the mower error"""
         error, ok = await self.command("GetError")
@@ -194,52 +209,6 @@ class Mower(BLEClient):
             return None
 
         return stats
-
-    async def get_task(self, taskid: int) -> TaskInformation | None:
-        """
-        Get information about a specific task
-        """
-        task, ok = await self.command("GetTask", taskId=taskid)
-        if not ok or not isinstance(task, dict):
-            return None
-
-        start = task.get("start")
-        duration = task.get("duration")
-        use_on_monday = task.get("useOnMonday")
-        use_on_tuesday = task.get("useOnTuesday")
-        use_on_wednesday = task.get("useOnWednesday")
-        use_on_thursday = task.get("useOnThursday")
-        use_on_friday = task.get("useOnFriday")
-        use_on_saturday = task.get("useOnSaturday")
-        use_on_sunday = task.get("useOnSunday")
-
-        if not all(
-            isinstance(value, int)
-            for value in (
-                start,
-                duration,
-                use_on_monday,
-                use_on_tuesday,
-                use_on_wednesday,
-                use_on_thursday,
-                use_on_friday,
-                use_on_saturday,
-                use_on_sunday,
-            )
-        ):
-            return None
-
-        return TaskInformation(
-            start,
-            duration,
-            use_on_monday,
-            use_on_tuesday,
-            use_on_wednesday,
-            use_on_thursday,
-            use_on_friday,
-            use_on_saturday,
-            use_on_sunday,
-        )
 
     async def mower_override(self, duration_hours: float = 3.0) -> bool:
         """
@@ -345,6 +314,11 @@ async def main(mower: Mower, args: argparse.Namespace):
 
         activity = await mower.mower_activity()
         print(f"Mower activity: {activity.name if activity is not None else 'Unknown'}")
+
+        override_status = await mower.mower_override_status()
+        print(
+            f"Mower override status: {override_status.name if override_status is not None else 'Unknown'}"
+        )
 
         error = await mower.mower_error()
         print(f"Mower error: {error.name if error is not None else 'Unknown'}")
