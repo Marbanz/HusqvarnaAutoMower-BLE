@@ -23,8 +23,11 @@ dependencies = [
   "bleak-retry-connector>=4.6.0",
 ]
 
-[tool.ruff]
-required-version = ">=0.4.2"
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.17.0",
+  "ruff>=0.4.2",
+]
 
 [tool.setuptools.package-data]
 husqvarna_automower_ble = ["*.json"]
