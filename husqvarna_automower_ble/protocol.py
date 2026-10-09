@@ -211,6 +211,15 @@ class Command:
 
         return self.request_data
 
+    FIELD_SIZES = {
+        "tUnixTime": 4,
+        "uint32": 4,
+        "uint16": 2,
+        "sint16": 2,
+        "uint8": 1,
+        "bool": 1,
+    }
+
     def parse_response(self, response_data: bytearray) -> dict[str, int | str] | None:
         response_length = response_data[17]
         data = response_data[19 : 19 + response_length]
@@ -223,6 +232,11 @@ class Command:
         for name, dtype in self.response_data_type.items():
             if dtype == "no_response":
                 return None
+            size = self.FIELD_SIZES.get(dtype, 0)
+            if dpos + size > len(data):
+                raise ValueError(
+                    f"Response too short. Need {dpos + size} bytes, got {len(data)}"
+                )
             if (dtype == "tUnixTime") or (dtype == "uint32"):
                 response[name] = int.from_bytes(
                     data[dpos : dpos + 4], byteorder="little"
@@ -424,9 +438,6 @@ class BLEClient:
         while len(data) < length:
             try:
                 chunk = await asyncio.wait_for(self.queue.get(), timeout=5)
-                if chunk is None:
-                    return None
-                data += chunk
             except TimeoutError:
                 logger.error(
                     "Unable to get full response from device '%s', currently have %s",
@@ -435,6 +446,10 @@ class BLEClient:
                 )
                 logger.error("Expecting %d bytes, only have %d", length, len(data))
                 return None
+            if chunk is None:
+                # Disconnected while waiting for the rest of the response
+                return None
+            data = data + chunk
 
         logger.debug("Final response: %s", str(binascii.hexlify(data)))
 
