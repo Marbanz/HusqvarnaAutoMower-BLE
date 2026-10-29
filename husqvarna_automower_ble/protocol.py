@@ -523,19 +523,16 @@ class BLEClient:
                     logger.warning(
                         "Unable to communicate with device: '%s'", self.address
                     )
-                    if self.is_connected():
-                        await self.disconnect()
+                    await self.disconnect()
                     return None
 
             except asyncio.exceptions.CancelledError:
                 logger.debug("Received CancelledError")
-                if self.is_connected():
-                    await self.disconnect()
+                await self.disconnect()
                 return None
             except BleakError as err:
                 logger.warning("BLE communication failed: %s", err)
-                if self.is_connected():
-                    await self.disconnect()
+                await self.disconnect()
                 raise
 
         return response_data
@@ -573,13 +570,11 @@ class BLEClient:
 
                 except asyncio.exceptions.CancelledError:
                     logger.debug("Received CancelledError")
-                    if self.is_connected():
-                        await self.disconnect()
+                    await self.disconnect()
                     return None
                 except BleakError as err:
                     logger.warning("BLE communication failed: %s", err)
-                    if self.is_connected():
-                        await self.disconnect()
+                    await self.disconnect()
                     raise
 
                 # Wait before retrying (except on last attempt)
@@ -588,8 +583,7 @@ class BLEClient:
                     await asyncio.sleep(1)
 
         logger.warning("Unable to communicate with device: '%s'", self.address)
-        if self.is_connected():
-            await self.disconnect()
+        await self.disconnect()
         return None
 
     async def connect(self, device) -> ResponseResult:
@@ -601,6 +595,9 @@ class BLEClient:
         if self.is_connected():
             logger.debug("Already connected")
             return ResponseResult.OK
+
+        if self.client is not None:
+            await self.disconnect()
 
         logger.info("starting scan...")
 
@@ -638,11 +635,16 @@ class BLEClient:
                     "Pairing failed, continuing with protocol handshake: %s", err
                 )
             if not self.client.is_connected:
+                await self.disconnect()
                 return ResponseResult.UNKNOWN_ERROR
         except BleakError as err:
             logger.info("Pairing failed, continuing with protocol handshake: %s", err)
             if not self.client.is_connected:
+                await self.disconnect()
                 return ResponseResult.UNKNOWN_ERROR
+        except asyncio.CancelledError:
+            await self.disconnect()
+            raise
 
         # This is not safe, _mtu_size is not defined in BaseBleakClient but may
         # be defined in subclasses.
@@ -695,8 +697,7 @@ class BLEClient:
 
         if self.write_char is None or self.read_char is None:
             logger.error("Could not find required write/read BLE characteristics")
-            if self.is_connected():
-                await self.disconnect()
+            await self.disconnect()
             return ResponseResult.NOT_AVAILABLE
 
         try:
@@ -713,19 +714,20 @@ class BLEClient:
                     await asyncio.sleep(1.0)
                     await self.client.start_notify(self.read_char, notification_handler)
                     self._notify_started = True
+                except asyncio.CancelledError:
+                    await self.disconnect()
+                    raise
                 except BleakError as retry_err:
                     logger.warning(
                         "Unable to subscribe to mower notifications after "
                         "pairing retry: %s",
                         retry_err,
                     )
-                    if self.is_connected():
-                        await self.disconnect()
+                    await self.disconnect()
                     return ResponseResult.NOT_ALLOWED
             else:
                 logger.warning("Unable to subscribe to mower notifications: %s", err)
-                if self.is_connected():
-                    await self.disconnect()
+                await self.disconnect()
                 return ResponseResult.NOT_ALLOWED
 
         await asyncio.sleep(3.0)
@@ -764,7 +766,7 @@ class BLEClient:
         return ResponseResult.OK
 
     def is_connected(self) -> bool:
-        return bool(self.client and self.client.is_connected)
+        return bool(self.client and self.client.is_connected and self._notify_started)
 
     async def probe_gatts(self, device):
         logger.info("connecting to device...")
@@ -843,18 +845,22 @@ class BLEClient:
         `connect()` before the Python script exits
         """
 
-        if self.client is None or self.read_char is None:
+        if self.client is None:
+            self.write_char = None
+            self.read_char = None
+            self._notify_started = False
             return
 
         logger.info("disconnecting...")
-        await self.client.disconnect()
-        logger.info("disconnected")
-        self.client = None
-        self.write_char = None
-        self.read_char = None
-        self._notify_started = False
-
-        await self.queue.put(None)
+        try:
+            await self.client.disconnect()
+            logger.info("disconnected")
+        finally:
+            self.client = None
+            self.write_char = None
+            self.read_char = None
+            self._notify_started = False
+            await self.queue.put(None)
 
     def generate_request_setup_channel_id(self) -> bytearray:
         """
